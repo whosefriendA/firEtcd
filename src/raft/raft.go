@@ -30,10 +30,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/whosefriendA/firEtcd/pb"
+	"github.com/whosefriendA/firEtcd/proto/pb"
 	"github.com/whosefriendA/firEtcd/src/config"
-	"github.com/whosefriendA/firEtcd/src/firlog"
-
 	"google.golang.org/grpc"
 )
 

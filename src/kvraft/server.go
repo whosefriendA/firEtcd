@@ -9,11 +9,11 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/whosefriendA/firEtcd/src/config"
-	"github.com/whosefriendA/firEtcd/src/raft"
+	"github.com/whosefriendA/firEtcd/proto/pb"
 	buntdbx "github.com/whosefriendA/firEtcd/src/buntdb"
 	"github.com/whosefriendA/firEtcd/src/common"
-	"github.com/whosefriendA/firEtcd/pb"
+	"github.com/whosefriendA/firEtcd/src/config"
+	"github.com/whosefriendA/firEtcd/src/raft"
 
 	"google.golang.org/grpc"
 )

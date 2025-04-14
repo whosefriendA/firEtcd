@@ -1,9 +1,5 @@
 package raft
 
-import (
-	"github.com/Oncelane/laneEtcd/src/pkg/laneLog"
-)
-
 // Debugging
 const Debug = true
 
