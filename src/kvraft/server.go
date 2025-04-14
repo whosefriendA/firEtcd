@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/gob"
+	"github.com/whosefriendA/firEtcd/src/firlog"
 	"net"
 	"sync"
 	"sync/atomic"
@@ -69,7 +70,7 @@ func (kv *KVServer) Get(_ context.Context, args *pb.GetArgs) (reply *pb.GetReply
 
 	//判断自己有没有从重启中恢复完毕状态机
 	if !kv.rf.IisBack {
-		laneLog.Logger.Infof("server [%d] [recovering] reject a [Get]🔰 args[%v]", kv.me, args)
+		firlog.Logger.Infof("server [%d] [recovering] reject a [Get]🔰 args[%v]", kv.me, args)
 		reply.Err = ErrWaitForRecover
 		b := new(bytes.Buffer)
 		e := gob.NewEncoder(b)
@@ -77,7 +78,7 @@ func (kv *KVServer) Get(_ context.Context, args *pb.GetArgs) (reply *pb.GetReply
 			OpType: int32(pb.OpType_EmptyT),
 		})
 		if err != nil {
-			laneLog.Logger.Fatalln(err)
+			firlog.Logger.Fatalln(err)
 		}
 		kv.rf.Start(b.Bytes())
 		return reply, nil
@@ -103,7 +104,7 @@ func (kv *KVServer) Get(_ context.Context, args *pb.GetArgs) (reply *pb.GetReply
 			if args.WithPrefix {
 				entrys, err := kv.db.GetEntryWithPrefix(args.Key)
 				if err != nil {
-					laneLog.Logger.Fatalf("database GetEntryWithPrefix faild:%s", err)
+					firlog.Logger.Fatalf("database GetEntryWithPrefix faild:%s", err)
 				}
 
 				value = make([][]byte, 0, len(entrys))
@@ -119,7 +120,7 @@ func (kv *KVServer) Get(_ context.Context, args *pb.GetArgs) (reply *pb.GetReply
 		case pb.OpType_GetKeys:
 			ret, err := kv.db.Keys(int(args.PageSize), int(args.PageIndex))
 			if err != nil {
-				laneLog.Logger.Fatalln(err)
+				firlog.Logger.Fatalln(err)
 			}
 			value = make([][]byte, 0, len(ret))
 			for i := range ret {
@@ -131,7 +132,7 @@ func (kv *KVServer) Get(_ context.Context, args *pb.GetArgs) (reply *pb.GetReply
 		case pb.OpType_GetKVs:
 			ret, err := kv.db.KVs(int(args.PageSize), int(args.PageIndex))
 			if err != nil {
-				laneLog.Logger.Fatalln(err)
+				firlog.Logger.Fatalln(err)
 			}
 			value = make([][]byte, 0, len(ret))
 			for i := range ret {
@@ -261,7 +262,7 @@ func (kv *KVServer) PutAppend(_ context.Context, args *pb.PutAppendArgs) (reply 
 				return
 			}
 
-			laneLog.Logger.Infof("server [%d] [PutAppend] appliedIndex available :PutAppend index[%d] lastAppliedIndex[%d]", kv.me, index, kv.lastAppliedIndex)
+			firlog.Logger.Infof("server [%d] [PutAppend] appliedIndex available :PutAppend index[%d] lastAppliedIndex[%d]", kv.me, index, kv.lastAppliedIndex)
 			if term != kv.rf.GetTerm() {
 				//term不匹配了，说明本次提交失效
 				kv.mu.Unlock()
@@ -270,7 +271,7 @@ func (kv *KVServer) PutAppend(_ context.Context, args *pb.PutAppendArgs) (reply 
 			} //term匹配，说明本次提交一定是有效的
 
 			reply.Err = ErrOK
-			laneLog.Logger.Infof("server [%d] [PutAppend] success args.index[%d]", kv.me, index)
+			firlog.Logger.Infof("server [%d] [PutAppend] success args.index[%d]", kv.me, index)
 			kv.mu.Unlock()
 			if _, isleader := kv.rf.GetState(); !isleader {
 				reply.Err = ErrWrongLeader
@@ -283,12 +284,12 @@ func (kv *KVServer) PutAppend(_ context.Context, args *pb.PutAppendArgs) (reply 
 		case <-kv.lastIndexCh:
 			// 阻塞等待
 		case <-time.After(time.Millisecond * 500):
-			laneLog.Logger.Infof("server [%d] [PutAppend] fail [time out] args.index[%d]", kv.me, index)
+			firlog.Logger.Infof("server [%d] [PutAppend] fail [time out] args.index[%d]", kv.me, index)
 			return
 		}
 		// 因为time.After可能会在超时前多次被重置，所以还需要在外层额外做保证
 		if time.Since(startWait).Milliseconds() > 500 {
-			laneLog.Logger.Infof("server [%d] [PutAppend] fail [time out] args.index[%d]", kv.me, index)
+			firlog.Logger.Infof("server [%d] [PutAppend] fail [time out] args.index[%d]", kv.me, index)
 			return
 		}
 	}
@@ -320,10 +321,10 @@ func (kv *KVServer) HandleApplych() {
 			APPLYBREAK:
 				// laneLog.Logger.Debugln("pass", kv.me, "  raft_type.CommandIndex=", raft_type.CommandIndex)
 			} else if raft_type.SnapshotValid {
-				laneLog.Logger.Infof("📷 server [%d] receive raftSnapshotIndex[%d]", kv.me, raft_type.SnapshotIndex)
+				firlog.Logger.Infof("📷 server [%d] receive raftSnapshotIndex[%d]", kv.me, raft_type.SnapshotIndex)
 				kv.HandleApplychSnapshot(raft_type)
 			} else {
-				laneLog.Logger.Fatalf("Unrecordnized applyArgs type")
+				firlog.Logger.Fatalf("Unrecordnized applyArgs type")
 			}
 			kv.mu.Unlock()
 		}
@@ -338,7 +339,7 @@ func (kv *KVServer) HandleApplychCommand(raft_type raft.ApplyMsg) {
 		return
 	}
 	if OP.Offset <= kv.duplicateMap[OP.ClientId].Offset {
-		laneLog.Logger.Infof("⛔server [%d] [%v] lastapplied[%v]find in the cache and discard %v", kv.me, OP, kv.lastAppliedIndex, kv.db)
+		firlog.Logger.Infof("⛔server [%d] [%v] lastapplied[%v]find in the cache and discard %v", kv.me, OP, kv.lastAppliedIndex, kv.db)
 		return
 	}
 	kv.duplicateMap[OP.ClientId] = duplicateType{
@@ -351,7 +352,7 @@ func (kv *KVServer) HandleApplychCommand(raft_type raft.ApplyMsg) {
 
 		err := kv.db.PutEntry(OP.Key, OP.Entry)
 		if err != nil {
-			laneLog.Logger.Fatalf("database putEntry faild:%s", err)
+			firlog.Logger.Fatalf("database putEntry faild:%s", err)
 		}
 
 		// laneLog.Logger.Infof("server [%d] [Update] [Put]->[%s,%s] [map] -> %v", kv.me, op_type.Key, op_type.Value, kv.db)
@@ -372,7 +373,7 @@ func (kv *KVServer) HandleApplychCommand(raft_type raft.ApplyMsg) {
 			DeadTime: OP.Entry.DeadTime,
 		})
 		if err != nil {
-			laneLog.Logger.Fatalf("database putEntry faild:%s", err)
+			firlog.Logger.Fatalf("database putEntry faild:%s", err)
 		}
 		// laneLog.Logger.Infof("server [%d] [Update] [Append]->[%s : %s]", kv.me, op_type.Key, op_type.Value)
 
@@ -397,7 +398,7 @@ func (kv *KVServer) HandleApplychCommand(raft_type raft.ApplyMsg) {
 		}
 	case int32(pb.OpType_GetT):
 
-		laneLog.Logger.Fatalf("日志中不应该出现getType")
+		firlog.Logger.Fatalf("日志中不应该出现getType")
 
 	case int32(pb.OpType_BatchT):
 		var ops []raft.Op
@@ -406,7 +407,7 @@ func (kv *KVServer) HandleApplychCommand(raft_type raft.ApplyMsg) {
 		d := gob.NewDecoder(b)
 		err := d.Decode(&ops)
 		if err != nil {
-			laneLog.Logger.Fatalln("raw data:", []byte(OP.Entry.Value), err)
+			firlog.Logger.Fatalln("raw data:", []byte(OP.Entry.Value), err)
 		}
 		for _, op := range ops {
 			switch op.OpType {
@@ -436,7 +437,7 @@ func (kv *KVServer) HandleApplychCommand(raft_type raft.ApplyMsg) {
 		}
 
 	default:
-		laneLog.Logger.Fatalf("日志中出现未知optype = [%d]", OP.OpType)
+		firlog.Logger.Fatalf("日志中出现未知optype = [%d]", OP.OpType)
 	}
 
 }
@@ -448,7 +449,7 @@ func (kv *KVServer) HandleApplychSnapshot(raft_type raft.ApplyMsg) {
 	}
 	snapshot := raft_type.Snapshot
 	kv.readPersist(snapshot)
-	laneLog.Logger.Infof("server [%d] passive📷 lastAppliedIndex[%d] -> [%d]", kv.me, kv.lastAppliedIndex, raft_type.SnapshotIndex)
+	firlog.Logger.Infof("server [%d] passive📷 lastAppliedIndex[%d] -> [%d]", kv.me, kv.lastAppliedIndex, raft_type.SnapshotIndex)
 	kv.lastAppliedIndex = raft_type.SnapshotIndex
 	for {
 		select {
@@ -469,17 +470,17 @@ func (kv *KVServer) checkifNeedSnapshot(spanshotindex int) {
 		return
 	} //需要进行快照了
 
-	laneLog.Logger.Infof("server [%d] need snapshot limit[%d] curRaftStatesize[%d] snapshotIndex[%d]", kv.me, kv.maxraftstate, kv.persister.RaftStateSize(), spanshotindex)
+	firlog.Logger.Infof("server [%d] need snapshot limit[%d] curRaftStatesize[%d] snapshotIndex[%d]", kv.me, kv.maxraftstate, kv.persister.RaftStateSize(), spanshotindex)
 	//首先查看一下自己的状态机应用到了那一步
 
 	var buf bytes.Buffer
 	enc := gob.NewEncoder(&buf)
 	if err := enc.Encode(kv.duplicateMap); err != nil {
-		laneLog.Logger.Fatalf("snapshot duplicateMap encoder fail:%s", err)
+		firlog.Logger.Fatalf("snapshot duplicateMap encoder fail:%s", err)
 	}
 	data, err := kv.db.SnapshotData()
 	if err != nil {
-		laneLog.Logger.Fatalf("database snapshotdata faild:%s", err)
+		firlog.Logger.Fatalf("database snapshotdata faild:%s", err)
 	}
 	enc.Encode(data)
 	//将状态机传了进去
@@ -493,27 +494,27 @@ func (kv *KVServer) readPersist(data []byte) {
 	if data == nil || len(data) < 1 {
 		return
 	}
-	laneLog.Logger.Infof("server [%d] passive 📷 len of snapshotdate[%d] ", kv.me, len(data))
-	laneLog.Logger.Infof("server [%d] before map[%v]", kv.me, kv.db)
+	firlog.Logger.Infof("server [%d] passive 📷 len of snapshotdate[%d] ", kv.me, len(data))
+	firlog.Logger.Infof("server [%d] before map[%v]", kv.me, kv.db)
 	r := bytes.NewBuffer(data)
 	d := gob.NewDecoder(r)
 
 	duplicateMap := make(map[int64]duplicateType)
 	if err := d.Decode(&duplicateMap); err != nil {
-		laneLog.Logger.Fatalf("decode err:%s", err)
+		firlog.Logger.Fatalf("decode err:%s", err)
 	}
 
 	newdb := buntdbx.NewDB()
 	dbData := make([]byte, 0)
 	err := d.Decode(&dbData)
 	if err != nil {
-		laneLog.Logger.Fatalln("read persiset err", err)
+		firlog.Logger.Fatalln("read persiset err", err)
 	}
 	newdb.InstallSnapshotData(dbData)
 	kv.db = newdb
 	kv.duplicateMap = duplicateMap
 
-	laneLog.Logger.Infof("server [%d] after map[%v]", kv.me, kv.db)
+	firlog.Logger.Infof("server [%d] after map[%v]", kv.me, kv.db)
 
 }
 
@@ -548,7 +549,7 @@ func (kv *KVServer) killed() bool {
 // you don't need to snapshot.
 // StartKVServer() must return quickly, so it should start goroutines
 // for any long-running work.
-func StartKVServer(conf laneConfig.Kvserver, me int, persister *raft.Persister, maxraftstate int) *KVServer {
+func StartKVServer(conf firConfig.Kvserver, me int, persister *raft.Persister, maxraftstate int) *KVServer {
 	// call labgob.Register on structures you want
 	// Go's RPC library to marshall/unmarshall.
 	var err error
@@ -578,19 +579,19 @@ func StartKVServer(conf laneConfig.Kvserver, me int, persister *raft.Persister, 
 	// server grpc
 	lis, err := net.Listen("tcp", conf.Addr+conf.Port)
 	if err != nil {
-		laneLog.Logger.Fatalln("error: etcd start faild", err)
+		firlog.Logger.Fatalln("error: etcd start faild", err)
 	}
 	gServer := grpc.NewServer()
 	pb.RegisterKvserverServer(gServer, kv)
 	go func() {
 		if err := gServer.Serve(lis); err != nil {
-			laneLog.Logger.Fatalln("failed to serve : ", err.Error())
+			firlog.Logger.Fatalln("failed to serve : ", err.Error())
 		}
 	}()
 
-	laneLog.Logger.Infoln("etcd serivce is running on addr:", conf.Addr+conf.Port)
+	firlog.Logger.Infoln("etcd serivce is running on addr:", conf.Addr+conf.Port)
 	kv.grpc = gServer
 
-	laneLog.Logger.Infof("server [%d] restart", kv.me)
+	firlog.Logger.Infof("server [%d] restart", kv.me)
 	return kv
 }

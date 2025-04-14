@@ -1,7 +1,8 @@
 package kvraft
 
 import (
-	"github.com/whosefriendA/firEtcd/pb"
+	"github.com/whosefriendA/firEtcd/proto/pb"
+	"github.com/whosefriendA/firEtcd/src/firlog"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
@@ -16,7 +17,7 @@ type KVClient struct {
 func NewKvClient(addr string) *KVClient {
 	conn, err := grpc.NewClient(addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
 	if err != nil {
-		laneLog.Logger.Infoln("Dail faild ", err.Error())
+		firlog.Logger.Infoln("Dail faild ", err.Error())
 		return nil
 	}
 	client := pb.NewKvserverClient(conn)
