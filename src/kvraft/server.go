@@ -62,9 +62,9 @@ func (kv *KVServer) Get(_ context.Context, args *pb.GetArgs) (reply *pb.GetReply
 
 	//判断自己是不是leader
 	if _, ok := kv.rf.GetState(); ok {
-		// laneLog.Logger.Infof("server [%d] [info] i am leader", kv.me)
+		// firlog.Logger.Infof("server [%d] [info] i am leader", kv.me)
 	} else {
-		// laneLog.Logger.Infof("server [%d] [info] i am not leader ,leader is [%d]", kv.me, reply.LeaderId)
+		// firlog.Logger.Infof("server [%d] [info] i am not leader ,leader is [%d]", kv.me, reply.LeaderId)
 		return
 	}
 
@@ -149,24 +149,24 @@ func (kv *KVServer) Get(_ context.Context, args *pb.GetArgs) (reply *pb.GetReply
 		}
 		reply.Err = ErrOK
 		reply.Value = value
-		// laneLog.Logger.Infof("server [%d] [Get] [ok] lastAppliedIndex[%d] readLastIndex[%d]", kv.me, kv.lastAppliedIndex, readLastIndex)
-		// laneLog.Logger.Infof("server [%d] [Get] [Ok] the get args[%v] reply[%v]", kv.me, args, reply)
+		// firlog.Logger.Infof("server [%d] [Get] [ok] lastAppliedIndex[%d] readLastIndex[%d]", kv.me, kv.lastAppliedIndex, readLastIndex)
+		// firlog.Logger.Infof("server [%d] [Get] [Ok] the get args[%v] reply[%v]", kv.me, args, reply)
 	} else {
 		reply.Err = ErrWaitForRecover
-		// laneLog.Logger.Infof("server [%d] [Get] [ErrWaitForRecover] kv.lastAppliedIndex < readLastIndex args[%v] reply[%v]", kv.me, *args, *reply)
+		// firlog.Logger.Infof("server [%d] [Get] [ErrWaitForRecover] kv.lastAppliedIndex < readLastIndex args[%v] reply[%v]", kv.me, *args, *reply)
 	}
 
-	// laneLog.Logger.Infof("server [%d] [Get] [NoKey] the get args[%v] reply[%v]", kv.me, args, reply)
-	// laneLog.Logger.Infof("server [%d] [map] -> %v", kv.me, kv.db)
+	// firlog.Logger.Infof("server [%d] [Get] [NoKey] the get args[%v] reply[%v]", kv.me, args, reply)
+	// firlog.Logger.Infof("server [%d] [map] -> %v", kv.me, kv.db)
 
 	return reply, nil
 }
 
 func (kv *KVServer) PutAppend(_ context.Context, args *pb.PutAppendArgs) (reply *pb.PutAppendReply, err error) {
 	// start := time.Now()
-	// laneLog.Logger.Infof("server [%d] [PutAppend] 📨receive a args[%v]", kv.me, args.String())
+	// firlog.Logger.Infof("server [%d] [PutAppend] 📨receive a args[%v]", kv.me, args.String())
 	// defer func() {
-	// 	laneLog.Logger.Infof("server [%d] [PutAppend] 📨complete a args[%v] spand time:%v", kv.me, args.String(), time.Since(start))
+	// 	firlog.Logger.Infof("server [%d] [PutAppend] 📨complete a args[%v] spand time:%v", kv.me, args.String(), time.Since(start))
 	// }()
 	reply = new(pb.PutAppendReply)
 	// Your code here.
@@ -175,9 +175,9 @@ func (kv *KVServer) PutAppend(_ context.Context, args *pb.PutAppendArgs) (reply 
 	reply.ServerId = int32(kv.me)
 
 	if _, ok := kv.rf.GetState(); ok {
-		// laneLog.Logger.Infof("server [%d] [info] i am leader", kv.me)
+		// firlog.Logger.Infof("server [%d] [info] i am leader", kv.me)
 	} else {
-		// laneLog.Logger.Infof("server [%d] [info] i am not leader ,leader is [%d]", kv.me, reply.LeaderId)
+		// firlog.Logger.Infof("server [%d] [info] i am not leader ,leader is [%d]", kv.me, reply.LeaderId)
 		return
 	}
 	// v := DateToValue(args.Value)
@@ -201,7 +201,7 @@ func (kv *KVServer) PutAppend(_ context.Context, args *pb.PutAppendArgs) (reply 
 	kv.mu.Lock()
 	if args.LatestOffset < kv.duplicateMap[args.ClientId].Offset {
 		kv.mu.Unlock()
-		//laneLog.Logger.Debugln("pass", kv.me)
+		//firlog.Logger.Debugln("pass", kv.me)
 		return
 	}
 	if args.LatestOffset == kv.duplicateMap[args.ClientId].Offset {
@@ -214,7 +214,7 @@ func (kv *KVServer) PutAppend(_ context.Context, args *pb.PutAppendArgs) (reply 
 				reply.Err = ErrCasFaildInt
 			}
 		}
-		//laneLog.Logger.Debugln("pass", kv.me)
+		//firlog.Logger.Debugln("pass", kv.me)
 		kv.mu.Unlock()
 		return
 	}
@@ -222,7 +222,7 @@ func (kv *KVServer) PutAppend(_ context.Context, args *pb.PutAppendArgs) (reply 
 
 	//没有在本地缓存发现过seq
 	//向raft提交操作
-	// laneLog.Logger.Debugln("raw data:", []byte(op.Value))
+	// firlog.Logger.Debugln("raw data:", []byte(op.Value))
 	// data, err := json.Marshal(op)
 
 	index, term, isleader := kv.rf.Start(op.Marshal())
@@ -232,7 +232,7 @@ func (kv *KVServer) PutAppend(_ context.Context, args *pb.PutAppendArgs) (reply 
 	}
 
 	kv.rf.SendAppendEntriesToAll()
-	// laneLog.Logger.Infof("server [%d] submit to raft key[%v] value[%v]", kv.me, op.Key, op.Value)
+	// firlog.Logger.Infof("server [%d] submit to raft key[%v] value[%v]", kv.me, op.Key, op.Value)
 	//提交后阻塞等待
 	//等待applyCh拿到对应的index，比对seq是否正确
 	startWait := time.Now()
@@ -243,7 +243,7 @@ func (kv *KVServer) PutAppend(_ context.Context, args *pb.PutAppendArgs) (reply 
 		if index <= kv.lastAppliedIndex {
 			//双重防重复
 			if args.LatestOffset < kv.duplicateMap[args.ClientId].Offset {
-				//laneLog.Logger.Debugln("pass", kv.me)
+				//firlog.Logger.Debugln("pass", kv.me)
 				kv.mu.Unlock()
 				return
 			}
@@ -257,7 +257,7 @@ func (kv *KVServer) PutAppend(_ context.Context, args *pb.PutAppendArgs) (reply 
 						reply.Err = ErrCasFaildInt
 					}
 				}
-				//laneLog.Logger.Debugln("pass", kv.me)
+				//firlog.Logger.Debugln("pass", kv.me)
 				kv.mu.Unlock()
 				return
 			}
@@ -266,7 +266,7 @@ func (kv *KVServer) PutAppend(_ context.Context, args *pb.PutAppendArgs) (reply 
 			if term != kv.rf.GetTerm() {
 				//term不匹配了，说明本次提交失效
 				kv.mu.Unlock()
-				//laneLog.Logger.Debugln("pass", kv.me)
+				//firlog.Logger.Debugln("pass", kv.me)
 				return
 			} //term匹配，说明本次提交一定是有效的
 
@@ -276,7 +276,7 @@ func (kv *KVServer) PutAppend(_ context.Context, args *pb.PutAppendArgs) (reply 
 			if _, isleader := kv.rf.GetState(); !isleader {
 				reply.Err = ErrWrongLeader
 			}
-			//laneLog.Logger.Debugln("pass", kv.me)
+			//firlog.Logger.Debugln("pass", kv.me)
 			return
 		}
 		kv.mu.Unlock()
@@ -302,7 +302,7 @@ func (kv *KVServer) HandleApplych() {
 	for !kv.killed() {
 		select {
 		case raft_type := <-kv.applyCh:
-			//laneLog.Logger.Debugln("pass", kv.me)
+			//firlog.Logger.Debugln("pass", kv.me)
 			if kv.killed() {
 				return
 			}
@@ -319,7 +319,7 @@ func (kv *KVServer) HandleApplych() {
 					}
 				}
 			APPLYBREAK:
-				// laneLog.Logger.Debugln("pass", kv.me, "  raft_type.CommandIndex=", raft_type.CommandIndex)
+				// firlog.Logger.Debugln("pass", kv.me, "  raft_type.CommandIndex=", raft_type.CommandIndex)
 			} else if raft_type.SnapshotValid {
 				firlog.Logger.Infof("📷 server [%d] receive raftSnapshotIndex[%d]", kv.me, raft_type.SnapshotIndex)
 				kv.HandleApplychSnapshot(raft_type)
@@ -355,8 +355,8 @@ func (kv *KVServer) HandleApplychCommand(raft_type raft.ApplyMsg) {
 			firlog.Logger.Fatalf("database putEntry faild:%s", err)
 		}
 
-		// laneLog.Logger.Infof("server [%d] [Update] [Put]->[%s,%s] [map] -> %v", kv.me, op_type.Key, op_type.Value, kv.db)
-		// laneLog.Logger.Infof("server [%d] [Update] [Put]->[%s : %s] ", kv.me, op_type.Key, op_type.Value)
+		// firlog.Logger.Infof("server [%d] [Update] [Put]->[%s,%s] [map] -> %v", kv.me, op_type.Key, op_type.Value, kv.db)
+		// firlog.Logger.Infof("server [%d] [Update] [Put]->[%s : %s] ", kv.me, op_type.Key, op_type.Value)
 	case int32(pb.OpType_AppendT):
 
 		ori, _ := kv.db.GetEntry(OP.Key)
@@ -375,7 +375,7 @@ func (kv *KVServer) HandleApplychCommand(raft_type raft.ApplyMsg) {
 		if err != nil {
 			firlog.Logger.Fatalf("database putEntry faild:%s", err)
 		}
-		// laneLog.Logger.Infof("server [%d] [Update] [Append]->[%s : %s]", kv.me, op_type.Key, op_type.Value)
+		// firlog.Logger.Infof("server [%d] [Update] [Append]->[%s : %s]", kv.me, op_type.Key, op_type.Value)
 
 	case int32(pb.OpType_DelT):
 		kv.db.Del(OP.Key)
@@ -403,7 +403,7 @@ func (kv *KVServer) HandleApplychCommand(raft_type raft.ApplyMsg) {
 	case int32(pb.OpType_BatchT):
 		var ops []raft.Op
 		b := bytes.NewBuffer([]byte(OP.Entry.Value))
-		// laneLog.Logger.Debugln("receive batch data:", b.Bytes())
+		// firlog.Logger.Debugln("receive batch data:", b.Bytes())
 		d := gob.NewDecoder(b)
 		err := d.Decode(&ops)
 		if err != nil {
@@ -433,7 +433,7 @@ func (kv *KVServer) HandleApplychCommand(raft_type raft.ApplyMsg) {
 			case int32(pb.OpType_DelWithPrefix):
 				kv.db.DelWithPrefix(op.Key)
 			}
-			// laneLog.Logger.Infof("exec batch op: %+v", op)
+			// firlog.Logger.Infof("exec batch op: %+v", op)
 		}
 
 	default:

@@ -4,9 +4,9 @@ import "errors"
 
 // const Debug = false
 
-// func laneLog.Logger.Infof(format string, a ...interface{}) {
+// func firlog.Logger.Infof(format string, a ...interface{}) {
 // 	if Debug {
-// 		laneLog.Logger.Infof(format, a...)
+// 		firlog.Logger.Infof(format, a...)
 // 	}
 // 	return
 // }
