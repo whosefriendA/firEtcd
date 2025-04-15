@@ -1,6 +1,7 @@
-package laneConfig
+package firconfig
 
 import (
+	"github.com/whosefriendA/firEtcd/src/pkg/firlog"
 	"log"
 	"os"
 
@@ -29,9 +30,9 @@ func Init(Path string, conf LaneConfig) {
 		if os.IsNotExist(err) {
 			conf.Default()
 			WriteLocal(Path, conf)
-			laneLog.Logger.Warnf("please check for the %s if needed to be modified, then run again\n", Path)
+			firlog.Logger.Warnf("please check for the %s if needed to be modified, then run again\n", Path)
 		} else {
-			laneLog.Logger.Fatalln("config wrong err:", err)
+			firlog.Logger.Fatalln("config wrong err:", err)
 		}
 	}
 	ReadLocal(Path, conf)
@@ -40,13 +41,13 @@ func Init(Path string, conf LaneConfig) {
 func WriteLocal(Path string, conf LaneConfig) error {
 	out, err := yaml.Marshal(conf)
 	if err != nil {
-		laneLog.Logger.Fatalln("failed to marshal config", Path, ":", err)
+		firlog.Logger.Fatalln("failed to marshal config", Path, ":", err)
 		return err
 	}
 
 	err = os.WriteFile(Path, out, 0644)
 	if err != nil {
-		laneLog.Logger.Fatalln("failed to write ", Path, err)
+		firlog.Logger.Fatalln("failed to write ", Path, err)
 		return err
 	}
 	return nil
@@ -56,12 +57,12 @@ func ReadLocal(Path string, conf LaneConfig) error {
 	log.Println("read from ", Path)
 	data, err := os.ReadFile(Path)
 	if err != nil {
-		laneLog.Logger.Fatalln("config.yaml does not exist")
+		firlog.Logger.Fatalln("config.yaml does not exist")
 	}
 
 	err = yaml.Unmarshal(data, conf)
 	if err != nil {
-		laneLog.Logger.Fatalln("can't not read config.yml")
+		firlog.Logger.Fatalln("can't not read config.yml")
 	}
 	return err
 }

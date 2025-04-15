@@ -5,8 +5,8 @@ import (
 	"encoding/gob"
 	"unsafe"
 
-	"github.com/whosefriendA/firEtcd/src/firlog"
 	"github.com/whosefriendA/firEtcd/src/common"
+	"github.com/whosefriendA/firEtcd/src/pkg/firlog"
 )
 
 type Op struct {
@@ -28,7 +28,7 @@ func (o *Op) Marshal() []byte {
 	en := gob.NewEncoder(b)
 	err := en.Encode(o)
 	if err != nil {
-		laneLog.Logger.Fatalln(err)
+		firlog.Logger.Fatalln(err)
 	}
 	return b.Bytes()
 }
@@ -38,7 +38,7 @@ func (o *Op) Unmarshal(data []byte) {
 	d := gob.NewDecoder(b)
 	err := d.Decode(o)
 	if err != nil {
-		laneLog.Logger.Fatalf("raft applyArgs.command -> Op 失败,raft_type.Command = %v", data, err)
+		firlog.Logger.Fatalf("raft applyArgs.command -> Op 失败,raft_type.Command = %v", data, err)
 		return
 	}
 }

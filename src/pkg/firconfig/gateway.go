@@ -1,4 +1,4 @@
-package laneConfig
+package firconfig
 
 type Gateway struct {
 	Clerk   Clerk

@@ -23,6 +23,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/gob"
+	"github.com/whosefriendA/firEtcd/src/pkg/firlog"
 	"math/rand"
 	"net"
 	"sort"
@@ -31,7 +32,7 @@ import (
 	"time"
 
 	"github.com/whosefriendA/firEtcd/proto/pb"
-	"github.com/whosefriendA/firEtcd/src/config"
+	"github.com/whosefriendA/firEtcd/src/pkg/firconfig"
 	"google.golang.org/grpc"
 )
 
@@ -151,7 +152,7 @@ func (rf *Raft) Applyer() {
 	for !rf.killed() {
 		select {
 		case rf.applyCh <- <-rf.applyChTerm:
-			// laneLog.Logger.Infof("Term[%d] [%d] now applyChtemp len=[%d]", rf.currentTerm, rf.me, len(rf.applyChTerm))
+			// firlog.Logger.Infof("Term[%d] [%d] now applyChtemp len=[%d]", rf.currentTerm, rf.me, len(rf.applyChTerm))
 		}
 	}
 }
@@ -243,7 +244,7 @@ func (rf *Raft) persist() {
 	// Example:
 	data := rf.persistWithSnapshot()
 	rf.persister.Save(data, rf.SnapshotDate)
-	// laneLog.Logger.Infof("📦Per Term[%d] [%d] len of persist.Snapshot[%d],len of raft.snapshot[%d]", rf.currentTerm, rf.me, len(rf.persister.snapshot), len(rf.SnapshotDate))
+	// firlog.Logger.Infof("📦Per Term[%d] [%d] len of persist.Snapshot[%d],len of raft.snapshot[%d]", rf.currentTerm, rf.me, len(rf.persister.snapshot), len(rf.SnapshotDate))
 }
 
 func (rf *Raft) persistWithSnapshot() []byte {
@@ -347,15 +348,15 @@ func (rf *Raft) CopyEntries(args *pb.AppendEntriesArgs) {
 	}
 	//用于debug
 	// if logchange {
-	// 	laneLog.Logger.Infof("💖Rev Term[%d] [%d] Copy: Len -> [%d] ", rf.currentTerm, rf.me, len(rf.log))
+	// 	firlog.Logger.Infof("💖Rev Term[%d] [%d] Copy: Len -> [%d] ", rf.currentTerm, rf.me, len(rf.log))
 
-	// 	laneLog.Logger.Infof("Term[%d] [%d] after copy:", rf.currentTerm, rf.me)
+	// 	firlog.Logger.Infof("Term[%d] [%d] after copy:", rf.currentTerm, rf.me)
 	// 	i := len(rf.log) - 10
 	// 	if i < 0 {
 	// 		i = 0
 	// 	}
 	// 	// for ; i < len(rf.log); i++ {
-	// 	// 	laneLog.Logger.Infof("Term[%d] [%d] index[%d] log[%v]", rf.currentTerm, rf.me, i+rf.lastIncludeIndex+1, rf.log[i].Value)
+	// 	// 	firlog.Logger.Infof("Term[%d] [%d] index[%d] log[%v]", rf.currentTerm, rf.me, i+rf.lastIncludeIndex+1, rf.log[i].Value)
 	// 	// }
 
 	// }
@@ -366,7 +367,7 @@ func (rf *Raft) CopyEntries(args *pb.AppendEntriesArgs) {
 		min = int(args.LeaderCommit)
 	}
 	if rf.commitIndex < min {
-		// laneLog.Logger.Infof("COMIT Term[%d] [%d] CommitIndex: [%d] -> [%d]", rf.currentTerm, rf.me, rf.commitIndex, min)
+		// firlog.Logger.Infof("COMIT Term[%d] [%d] CommitIndex: [%d] -> [%d]", rf.currentTerm, rf.me, rf.commitIndex, min)
 		rf.commitIndex = min
 		rf.undateLastApplied()
 	}
@@ -374,13 +375,13 @@ func (rf *Raft) CopyEntries(args *pb.AppendEntriesArgs) {
 }
 func (rf *Raft) RequestVote(_ context.Context, args *pb.RequestVoteArgs) (reply *pb.RequestVoteReply, err error) {
 	reply = new(pb.RequestVoteReply)
-	// laneLog.Logger.Panicln("check for args", args)
+	// firlog.Logger.Panicln("check for args", args)
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
-	defer laneLog.Logger.Infof("🎫Rec Term[%d] [%d]reply [%d]Vote finish", rf.currentTerm, rf.me, args.CandidateId)
+	defer firlog.Logger.Infof("🎫Rec Term[%d] [%d]reply [%d]Vote finish", rf.currentTerm, rf.me, args.CandidateId)
 	// defer func() { //defer最后运行
 	// 	if err := recover(); err != nil {
-	// 		laneLog.Logger.Errorf("程序报错了，错误信息为=%s\n", err)
+	// 		firlog.Logger.Errorf("程序报错了，错误信息为=%s\n", err)
 	// 	}
 	// }()
 	reply.VoteGranted = false
@@ -402,7 +403,7 @@ func (rf *Raft) RequestVote(_ context.Context, args *pb.RequestVoteArgs) (reply 
 			rf.votedFor = int(args.CandidateId)
 			reply.VoteGranted = true
 			rf.lastHearBeatTime = time.Now()
-			laneLog.Logger.Infof("🎫Rec Term[%d] [%d] -> [%d]", rf.currentTerm, rf.me, args.CandidateId)
+			firlog.Logger.Infof("🎫Rec Term[%d] [%d] -> [%d]", rf.currentTerm, rf.me, args.CandidateId)
 		}
 	}
 	rf.persist()
@@ -419,7 +420,7 @@ func (rf *Raft) AppendEntries(_ context.Context, args *pb.AppendEntriesArgs) (re
 	reply.ConflictTerm = -1
 
 	if rf.currentTerm > int(args.Term) {
-		laneLog.Logger.Infof("💔Rec Term[%d] [%d] Reject Leader[%d]Term[%d][too OLE]", rf.currentTerm, rf.me, args.LeaderId, int(args.Term))
+		firlog.Logger.Infof("💔Rec Term[%d] [%d] Reject Leader[%d]Term[%d][too OLE]", rf.currentTerm, rf.me, args.LeaderId, int(args.Term))
 		return
 	}
 	// rf.tryChangeToFollower(int(args.Term))
@@ -436,22 +437,22 @@ func (rf *Raft) AppendEntries(_ context.Context, args *pb.AppendEntriesArgs) (re
 	}
 	rf.lastHearBeatTime = time.Now()
 	rf.leaderId = int(args.LeaderId)
-	// laneLog.Logger.Infof("💖Rec Term[%d] [%d] Receive: LeaderId[%d]Term[%d] PreLogIndex[%d] PrevLogTerm[%d] LeaderCommit[%d] Entries[%v] len[%d]", rf.currentTerm, rf.me, args.LeaderId, args.Term, args.PrevLogIndex, args.PrevLogTerm, args.LeaderCommit, args.Entries, len(args.Entries))
+	// firlog.Logger.Infof("💖Rec Term[%d] [%d] Receive: LeaderId[%d]Term[%d] PreLogIndex[%d] PrevLogTerm[%d] LeaderCommit[%d] Entries[%v] len[%d]", rf.currentTerm, rf.me, args.LeaderId, args.Term, args.PrevLogIndex, args.PrevLogTerm, args.LeaderCommit, args.Entries, len(args.Entries))
 	//新判断
 	if args.PrevLogIndex < int64(rf.lastIncludeIndex) { // index在快照范围内，那么
 		reply.ConflictIndex = 0
-		laneLog.Logger.Infof("💔Rec Term[%d] [%d] Reject for args.PrevLogIndex[%d] < rf.lastIncludeIndex[%d]", rf.currentTerm, rf.me, args.PrevLogIndex, rf.lastIncludeIndex)
+		firlog.Logger.Infof("💔Rec Term[%d] [%d] Reject for args.PrevLogIndex[%d] < rf.lastIncludeIndex[%d]", rf.currentTerm, rf.me, args.PrevLogIndex, rf.lastIncludeIndex)
 		return
 	} else if args.PrevLogIndex == int64(rf.lastIncludeIndex) {
 		if args.PrevLogTerm != int64(rf.lastIncludeTerm) {
 			reply.ConflictIndex = 0
-			laneLog.Logger.Infof("💔Rec Term[%d] [%d] Reject for args.PrevLogTermk[%d] != rf.lastIncludeTerm[%d]", rf.currentTerm, rf.me, args.PrevLogIndex, rf.lastIncludeIndex)
+			firlog.Logger.Infof("💔Rec Term[%d] [%d] Reject for args.PrevLogTermk[%d] != rf.lastIncludeTerm[%d]", rf.currentTerm, rf.me, args.PrevLogIndex, rf.lastIncludeIndex)
 			return
 		}
 	} else { //index在快照范围外，那么正常走日志覆盖逻辑
 		if rf.lastIndex() < int(args.PrevLogIndex) {
 			reply.ConflictIndex = int64(rf.lastIndex())
-			laneLog.Logger.Infof("💔Rec Term[%d] [%d] Reject:PreLogIndex[%d] Out of Len ->[%d]", rf.currentTerm, rf.me, args.PrevLogIndex, rf.lastIndex())
+			firlog.Logger.Infof("💔Rec Term[%d] [%d] Reject:PreLogIndex[%d] Out of Len ->[%d]", rf.currentTerm, rf.me, args.PrevLogIndex, rf.lastIndex())
 			return
 		}
 
@@ -463,7 +464,7 @@ func (rf *Raft) AppendEntries(_ context.Context, args *pb.AppendEntriesArgs) (re
 					break
 				}
 			}
-			laneLog.Logger.Infof("💔Rev Term[%d] [%d] Reject :PreLogTerm Not Match [%d] != [%d]", rf.currentTerm, rf.me, rf.log[rf.index2LogPos(int(args.PrevLogIndex))].Term, args.PrevLogTerm)
+			firlog.Logger.Infof("💔Rev Term[%d] [%d] Reject :PreLogTerm Not Match [%d] != [%d]", rf.currentTerm, rf.me, rf.log[rf.index2LogPos(int(args.PrevLogIndex))].Term, args.PrevLogTerm)
 			return
 		}
 	}
@@ -478,12 +479,12 @@ func (rf *Raft) SnapshotInstall(_ context.Context, args *pb.SnapshotInstallArgs)
 	reply = new(pb.SnapshotInstallReply)
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
-	laneLog.Logger.Infof("SNAPS Term[%d] [%d] Receiv📷 from[%d] lastIncludeIndex[%d] lastIncludeTerm[%d]", rf.currentTerm, rf.me, args.LeaderId, args.LastIncludeIndex, args.LastIncludeTerm)
+	firlog.Logger.Infof("SNAPS Term[%d] [%d] Receiv📷 from[%d] lastIncludeIndex[%d] lastIncludeTerm[%d]", rf.currentTerm, rf.me, args.LeaderId, args.LastIncludeIndex, args.LastIncludeTerm)
 
 	reply.Term = int64(rf.currentTerm)
 
 	if args.Term < int64(rf.currentTerm) {
-		laneLog.Logger.Infof("SNAPS Term[%d] [%d] reject📷 for it's Term[%d] [too old]", rf.currentTerm, rf.me, args.Term)
+		firlog.Logger.Infof("SNAPS Term[%d] [%d] reject📷 for it's Term[%d] [too old]", rf.currentTerm, rf.me, args.Term)
 		return
 	}
 
@@ -513,8 +514,8 @@ func (rf *Raft) SnapshotInstall(_ context.Context, args *pb.SnapshotInstallArgs)
 			rf.log = make([]pb.LogType, 0)
 		}
 	}
-	laneLog.Logger.Infof("SNAPS Term[%d] [%d] Accept📷 Now it's lastIncludeIndex [%d] -> [%d] lastIncludeTerm [%d] -> [%d]", rf.currentTerm, rf.me, rf.lastIncludeIndex, args.LastIncludeIndex, rf.lastIncludeTerm, args.LastIncludeTerm)
-	laneLog.Logger.Infof("snaps Term[%d] [%d] after snapshot log:", rf.currentTerm, rf.me)
+	firlog.Logger.Infof("SNAPS Term[%d] [%d] Accept📷 Now it's lastIncludeIndex [%d] -> [%d] lastIncludeTerm [%d] -> [%d]", rf.currentTerm, rf.me, rf.lastIncludeIndex, args.LastIncludeIndex, rf.lastIncludeTerm, args.LastIncludeTerm)
+	firlog.Logger.Infof("snaps Term[%d] [%d] after snapshot log:", rf.currentTerm, rf.me)
 
 	rf.lastIncludeIndex = int(args.LastIncludeIndex)
 	rf.lastIncludeTerm = int(args.LastIncludeTerm)
@@ -524,10 +525,10 @@ func (rf *Raft) SnapshotInstall(_ context.Context, args *pb.SnapshotInstallArgs)
 		i = 0
 	}
 	for ; i < len(rf.log); i++ {
-		laneLog.Logger.Infof("Term[%d] [%d] index[%d] value[term:%v data:%v]", rf.currentTerm, rf.me, i+rf.lastIncludeIndex+1, rf.log[i].Term, rf.log[i].Value)
+		firlog.Logger.Infof("Term[%d] [%d] index[%d] value[term:%v data:%v]", rf.currentTerm, rf.me, i+rf.lastIncludeIndex+1, rf.log[i].Term, rf.log[i].Value)
 	}
 	spanshootLength := rf.persister.SnapshotSize()
-	laneLog.Logger.Infof("📷Cmi Term[%d] [%d] 📦Save snapshot to application[%d] (Receive from leader)", rf.currentTerm, rf.me, spanshootLength)
+	firlog.Logger.Infof("📷Cmi Term[%d] [%d] 📦Save snapshot to application[%d] (Receive from leader)", rf.currentTerm, rf.me, spanshootLength)
 	//snapshot提交给应用层
 	applyMsg := ApplyMsg{
 		SnapshotValid: true,
@@ -537,14 +538,14 @@ func (rf *Raft) SnapshotInstall(_ context.Context, args *pb.SnapshotInstallArgs)
 	}
 	//快照提交给了application
 	rf.lastApplied = rf.lastIncludeIndex
-	laneLog.Logger.Infof("📷Cmi Term[%d] [%d] Ready to commit snapshot snapshotIndex[%d] snapshotTerm[%d]", rf.currentTerm, rf.me, rf.lastIncludeIndex, rf.lastIncludeTerm)
+	firlog.Logger.Infof("📷Cmi Term[%d] [%d] Ready to commit snapshot snapshotIndex[%d] snapshotTerm[%d]", rf.currentTerm, rf.me, rf.lastIncludeIndex, rf.lastIncludeTerm)
 	rf.mu.Unlock()
 	rf.applyChTerm <- applyMsg
 	rf.mu.Lock()
 	//持久化快照
 	rf.SnapshotDate = args.Data
 	rf.persister.Save(rf.persistWithSnapshot(), args.Data)
-	laneLog.Logger.Infof("📷Cmi Term[%d] [%d] Done Success to comit snapshot snapshotIndex[%d] snapshotTerm[%d]", rf.currentTerm, rf.me, rf.lastIncludeIndex, rf.lastIncludeTerm)
+	firlog.Logger.Infof("📷Cmi Term[%d] [%d] Done Success to comit snapshot snapshotIndex[%d] snapshotTerm[%d]", rf.currentTerm, rf.me, rf.lastIncludeIndex, rf.lastIncludeTerm)
 	return
 }
 
@@ -561,14 +562,14 @@ func (rf *Raft) installSnapshotToApplication() {
 	//快照提交给了application
 	snapshotLength := rf.persister.SnapshotSize()
 	if snapshotLength < 1 {
-		laneLog.Logger.Infof("📷Cmi Term[%d] [%d] Snapshotlen[%d] No need to commit snapshotIndex[%d] snapshotTerm[%d] ", rf.currentTerm, rf.me, snapshotLength, rf.lastIncludeIndex, rf.lastIncludeTerm)
+		firlog.Logger.Infof("📷Cmi Term[%d] [%d] Snapshotlen[%d] No need to commit snapshotIndex[%d] snapshotTerm[%d] ", rf.currentTerm, rf.me, snapshotLength, rf.lastIncludeIndex, rf.lastIncludeTerm)
 		return
 	}
 	rf.SnapshotDate = rf.persister.ReadSnapshot()
 	rf.lastApplied = rf.lastIncludeIndex
-	laneLog.Logger.Infof("📷Cmi Term[%d] [%d] Ready to commit snapshot snapshotIndex[%d] snapshotTerm[%d]", rf.currentTerm, rf.me, rf.lastIncludeIndex, rf.lastIncludeTerm)
+	firlog.Logger.Infof("📷Cmi Term[%d] [%d] Ready to commit snapshot snapshotIndex[%d] snapshotTerm[%d]", rf.currentTerm, rf.me, rf.lastIncludeIndex, rf.lastIncludeTerm)
 	rf.applyChTerm <- *applyMsg
-	laneLog.Logger.Infof("📷Cmi Term[%d] [%d] Done Success to comit snapshot snapshotIndex[%d] snapshotTerm[%d]", rf.currentTerm, rf.me, rf.lastIncludeIndex, rf.lastIncludeTerm)
+	firlog.Logger.Infof("📷Cmi Term[%d] [%d] Done Success to comit snapshot snapshotIndex[%d] snapshotTerm[%d]", rf.currentTerm, rf.me, rf.lastIncludeIndex, rf.lastIncludeTerm)
 }
 
 func (rf *Raft) sendInstallSnapshot(server int, args *pb.SnapshotInstallArgs) (reply *pb.SnapshotInstallReply, ok bool) {
@@ -582,11 +583,11 @@ func (rf *Raft) sendInstallSnapshot(server int, args *pb.SnapshotInstallArgs) (r
 // that index. Raft should now trim its log as much as possible.
 func (rf *Raft) Snapshot(index int, snapshot []byte) {
 	// Your code here (3D).
-	// laneLog.Logger.Infof("SNAPS Term[%d] [%d] 📷Snapshot ask to snap Index[%d] Raft log Len:[%d]", rf.currentTerm, rf.me, index-1, len(rf.log))
-	// laneLog.Logger.Infof("SNAPS Term[%d] [%d] Wait for the lock🤨", rf.currentTerm, rf.me)
+	// firlog.Logger.Infof("SNAPS Term[%d] [%d] 📷Snapshot ask to snap Index[%d] Raft log Len:[%d]", rf.currentTerm, rf.me, index-1, len(rf.log))
+	// firlog.Logger.Infof("SNAPS Term[%d] [%d] Wait for the lock🤨", rf.currentTerm, rf.me)
 	rf.mu.Lock()
-	// laneLog.Logger.Infof("SNAPS Term[%d] [%d] Get the lock🔐", rf.currentTerm, rf.me)
-	// defer laneLog.Logger.Infof("SNAPS Term[%d] [%d] Unlock the lock🔓", rf.currentTerm, rf.me)
+	// firlog.Logger.Infof("SNAPS Term[%d] [%d] Get the lock🔐", rf.currentTerm, rf.me)
+	// defer firlog.Logger.Infof("SNAPS Term[%d] [%d] Unlock the lock🔓", rf.currentTerm, rf.me)
 	defer rf.mu.Unlock()
 
 	index -= 1
@@ -594,7 +595,7 @@ func (rf *Raft) Snapshot(index int, snapshot []byte) {
 		return
 	}
 	compactLoglen := index - rf.lastIncludeIndex
-	// laneLog.Logger.Infof("SNAPS Term[%d] [%d] After📷,lastIncludeIndex[%d]->[%d] lastIncludeTerm[%d]->[%d] len of Log->[%d]", rf.currentTerm, rf.me, rf.lastIncludeIndex, index, rf.lastIncludeTerm, rf.log[rf.index2LogPos(index)].Term, len(rf.log)-compactLoglen)
+	// firlog.Logger.Infof("SNAPS Term[%d] [%d] After📷,lastIncludeIndex[%d]->[%d] lastIncludeTerm[%d]->[%d] len of Log->[%d]", rf.currentTerm, rf.me, rf.lastIncludeIndex, index, rf.lastIncludeTerm, rf.log[rf.index2LogPos(index)].Term, len(rf.log)-compactLoglen)
 
 	rf.lastIncludeTerm = int(rf.log[rf.index2LogPos(index)].Term)
 	rf.lastIncludeIndex = index
@@ -606,7 +607,7 @@ func (rf *Raft) Snapshot(index int, snapshot []byte) {
 	//把snapshot和raftstate持久化
 	rf.SnapshotDate = snapshot
 	rf.persister.Save(rf.persistWithSnapshot(), snapshot)
-	// laneLog.Logger.Infof("📷Cmi Term[%d] [%d] 📦Save snapshot to application[%d] (Receive from up Application)", rf.currentTerm, rf.me, rf.persister.SnapshotSize())
+	// firlog.Logger.Infof("📷Cmi Term[%d] [%d] 📦Save snapshot to application[%d] (Receive from up Application)", rf.currentTerm, rf.me, rf.persister.SnapshotSize())
 }
 
 const (
@@ -632,8 +633,8 @@ func (rf *Raft) updateCommitIndex() {
 		lenMat := len(matchIndex) //2 两台follower
 		N := matchIndex[lenMat/2] //1
 		if N > rf.commitIndex && (N <= rf.lastIncludeIndex || rf.currentTerm == int(rf.log[rf.index2LogPos(N)].Term)) {
-			// laneLog.Logger.Infof("COMIT Term[%d] [%d] It's matchIndex = %v", rf.currentTerm, rf.me, matchIndex)
-			// laneLog.Logger.Infof("COMIT Term[%d] [%d] commitIndex [%d] -> [%d] (leader action)", rf.currentTerm, rf.me, rf.commitIndex, N)
+			// firlog.Logger.Infof("COMIT Term[%d] [%d] It's matchIndex = %v", rf.currentTerm, rf.me, matchIndex)
+			// firlog.Logger.Infof("COMIT Term[%d] [%d] commitIndex [%d] -> [%d] (leader action)", rf.currentTerm, rf.me, rf.commitIndex, N)
 			rf.IisBackIndex = N
 			rf.commitIndex = N
 			rf.undateLastApplied()
@@ -643,28 +644,28 @@ func (rf *Raft) updateCommitIndex() {
 
 // 修改rf.lastApplied
 func (rf *Raft) undateLastApplied() {
-	// laneLog.Logger.Infof("APPLY Term[%d] [%d] Wait for the lock🔐", rf.currentTerm, rf.me)
-	// laneLog.Logger.Infof("APPLY Term[%d] [%d] Hode the lock🔐", rf.currentTerm, rf.me)
+	// firlog.Logger.Infof("APPLY Term[%d] [%d] Wait for the lock🔐", rf.currentTerm, rf.me)
+	// firlog.Logger.Infof("APPLY Term[%d] [%d] Hode the lock🔐", rf.currentTerm, rf.me)
 	for rf.lastApplied < rf.commitIndex {
 		rf.lastApplied += 1
 		index := rf.index2LogPos(rf.lastApplied)
 		if index <= -1 || index >= len(rf.log) {
 			rf.lastApplied = rf.lastIncludeIndex
-			laneLog.Logger.Errorf("ERROR? 👿 [%d]Ready to apply index[%d] But index out of Len of log, lastApplied[%d] commitIndex[%d] lastIncludeIndex[%d] logLen:%d", rf.me, index, rf.lastApplied, rf.commitIndex, rf.lastIncludeIndex, len(rf.log))
+			firlog.Logger.Errorf("ERROR? 👿 [%d]Ready to apply index[%d] But index out of Len of log, lastApplied[%d] commitIndex[%d] lastIncludeIndex[%d] logLen:%d", rf.me, index, rf.lastApplied, rf.commitIndex, rf.lastIncludeIndex, len(rf.log))
 			rf.mu.Unlock()
 			return
 		}
-		// laneLog.Logger.Infof("APPLY Term[%d] [%d] -> LOG [%d] value:[%d]", rf.currentTerm, rf.me, rf.lastApplied, rf.log[index].Value)
+		// firlog.Logger.Infof("APPLY Term[%d] [%d] -> LOG [%d] value:[%d]", rf.currentTerm, rf.me, rf.lastApplied, rf.log[index].Value)
 
 		ApplyMsg := ApplyMsg{
 			CommandValid: true,
 			Command:      rf.log[index].Value,
 			CommandIndex: rf.lastApplied + 1,
 		}
-		// laneLog.Logger.Infof("APPLY Term[%d] [%d] Unlock the lock🔐 For Start applyerCh <- len[%d]", rf.currentTerm, rf.me, len(rf.applyChTerm))
+		// firlog.Logger.Infof("APPLY Term[%d] [%d] Unlock the lock🔐 For Start applyerCh <- len[%d]", rf.currentTerm, rf.me, len(rf.applyChTerm))
 		rf.applyChTerm <- ApplyMsg
 		if rf.IisBackIndex == rf.lastApplied {
-			// laneLog.Logger.Infof("Term [%d] [%d] iisback = true iisbackIndex =[%d]", rf.currentTerm, rf.me, rf.IisBackIndex)
+			// firlog.Logger.Infof("Term [%d] [%d] iisback = true iisbackIndex =[%d]", rf.currentTerm, rf.me, rf.IisBackIndex)
 			rf.IisBack = true
 		}
 	}
@@ -703,7 +704,7 @@ func (rf *Raft) Start(command []byte) (int, int, bool) {
 	})
 	rf.persist()
 
-	// laneLog.Logger.Infof("CLIENT📨 Term[%d] [%d] Receive [%v] logIndex[%d](leader action)\n", rf.currentTerm, rf.me, command, index-1)
+	// firlog.Logger.Infof("CLIENT📨 Term[%d] [%d] Receive [%v] logIndex[%d](leader action)\n", rf.currentTerm, rf.me, command, index-1)
 	return index, term, isLeader
 }
 
@@ -742,7 +743,7 @@ func (rf *Raft) electionLoop() {
 			ms := TICKMIN + rand.Int63()%TICKRANDOM
 			if rf.state == follower {
 				if timeCount >= ms {
-					laneLog.Logger.Infof("❗Term[%d] [%d] Follower -> Candidate", rf.currentTerm, rf.me)
+					firlog.Logger.Infof("❗Term[%d] [%d] Follower -> Candidate", rf.currentTerm, rf.me)
 					rf.state = candidate
 					rf.leaderId = -1
 				}
@@ -778,14 +779,14 @@ func (rf *Raft) electionLoop() {
 						if resp, ok := rf.sendRequestVote2(server, &args); ok {
 
 							if resp.VoteGranted {
-								laneLog.Logger.Infof("🎫Get Term[%d] [%d]Candidate 🥰receive a voteRPC reply from [%d] ,voteGranted Yes", rf.currentTerm, rf.me, server)
+								firlog.Logger.Infof("🎫Get Term[%d] [%d]Candidate 🥰receive a voteRPC reply from [%d] ,voteGranted Yes", rf.currentTerm, rf.me, server)
 							} else {
-								laneLog.Logger.Infof("🎫Get Term[%d] [%d]Candidate 🥰receive a voteRPC reply from [%d] ,voteGranted No", rf.currentTerm, rf.me, server)
+								firlog.Logger.Infof("🎫Get Term[%d] [%d]Candidate 🥰receive a voteRPC reply from [%d] ,voteGranted No", rf.currentTerm, rf.me, server)
 							}
 							VoteResultChan <- &VoteResult{raftId: server, resp: resp}
 
 						} else {
-							// laneLog.Logger.Infof("🎫Get Term[%d] [%d]Candidate 🥲Do not get voteRPC reply from [%d] ,voteGranted Nil", rf.currentTerm, rf.me, server)
+							// firlog.Logger.Infof("🎫Get Term[%d] [%d]Candidate 🥲Do not get voteRPC reply from [%d] ,voteGranted Nil", rf.currentTerm, rf.me, server)
 							VoteResultChan <- &VoteResult{raftId: server, resp: nil}
 						}
 
@@ -809,7 +810,7 @@ func (rf *Raft) electionLoop() {
 							goto VOTE_END
 						}
 					case <-time.After(time.Duration(TICKMIN+rand.Int63()%TICKRANDOM) * time.Millisecond):
-						laneLog.Logger.Infof("🎫Get Term[%d] [%d]Candidate Fail🥲 election time out", rf.currentTerm, rf.me)
+						firlog.Logger.Infof("🎫Get Term[%d] [%d]Candidate Fail🥲 election time out", rf.currentTerm, rf.me)
 						goto VOTE_END
 					}
 				}
@@ -842,7 +843,7 @@ func (rf *Raft) electionLoop() {
 						rf.matchIndex[i] = -1
 					}
 					rf.updateCommitIndex()
-					laneLog.Logger.Infof("❗ Term[%d] [%d]candidate -> leader", rf.currentTerm, rf.me)
+					firlog.Logger.Infof("❗ Term[%d] [%d]candidate -> leader", rf.currentTerm, rf.me)
 					rf.lastSendHeartbeatTime = time.Now().Add(-time.Millisecond * 2 * HeartBeatInterval)
 					// data, _ := json.Marshal(Op{
 					// 	OpType: int32(pb.OpType_EmptyT),
@@ -858,7 +859,7 @@ func (rf *Raft) electionLoop() {
 					rf.mu.Lock()
 					return
 				}
-				// laneLog.Logger.Infof("🎫Rec Term[%d] [%d]candidate Fail to get majority Vote", rf.currentTerm, rf.me)
+				// firlog.Logger.Infof("🎫Rec Term[%d] [%d]candidate Fail to get majority Vote", rf.currentTerm, rf.me)
 			}
 
 		}()
@@ -919,7 +920,7 @@ func (rf *Raft) SendAppendEntriesToPeerId(server int, applychreply *chan int) {
 	defer rf.mu.Unlock()
 	if err == nil {
 		if args.Term != int64(rf.currentTerm) {
-			laneLog.Logger.Infof("💔Rec Term[%d] [%d] Receive Send.Term[%d][too OLD]", rf.currentTerm, rf.me, args.Term)
+			firlog.Logger.Infof("💔Rec Term[%d] [%d] Receive Send.Term[%d][too OLD]", rf.currentTerm, rf.me, args.Term)
 			if applychreply != nil {
 				*applychreply <- AEresult_Ignore
 			}
@@ -931,7 +932,7 @@ func (rf *Raft) SendAppendEntriesToPeerId(server int, applychreply *chan int) {
 			rf.currentTerm = int(reply.Term)
 			rf.leaderId = -1
 			rf.persist()
-			laneLog.Logger.Infof("💔Rec Term[%d] [%d] Receive Discover newer Term[%d]", rf.currentTerm, rf.me, reply.Term)
+			firlog.Logger.Infof("💔Rec Term[%d] [%d] Receive Discover newer Term[%d]", rf.currentTerm, rf.me, reply.Term)
 			if applychreply != nil {
 				*applychreply <- AEresult_StopSending
 			}
@@ -1024,7 +1025,7 @@ func (rf *Raft) SendOnlyAppendEntriesToAll() {
 }
 
 func (rf *Raft) sendInstallSnapshotToPeerId(server int) {
-	// laneLog.Logger.Infof("SNAPS Term[%d] [%d] goSend📷Wait for a lock🤨 to [%d],", rf.currentTerm, rf.me, server)
+	// firlog.Logger.Infof("SNAPS Term[%d] [%d] goSend📷Wait for a lock🤨 to [%d],", rf.currentTerm, rf.me, server)
 	rf.mu.Lock()
 	args := &pb.SnapshotInstallArgs{}
 	args.Term = int64(rf.currentTerm)
@@ -1032,7 +1033,7 @@ func (rf *Raft) sendInstallSnapshotToPeerId(server int) {
 	args.LastIncludeIndex = int64(rf.lastIncludeIndex)
 	args.LastIncludeTerm = int64(rf.lastIncludeTerm)
 	args.Data = rf.SnapshotDate
-	laneLog.Logger.Infof("SNAPS Term[%d] [%d] goSend📷 to [%d] args.LastIncludeIndex[%d],args.LastIncludeTerm[%d],len of snapshot[%d],", rf.currentTerm, rf.me, server, args.LastIncludeIndex, args.LastIncludeTerm, len(args.Data))
+	firlog.Logger.Infof("SNAPS Term[%d] [%d] goSend📷 to [%d] args.LastIncludeIndex[%d],args.LastIncludeTerm[%d],len of snapshot[%d],", rf.currentTerm, rf.me, server, args.LastIncludeIndex, args.LastIncludeTerm, len(args.Data))
 	rf.mu.Unlock()
 	go func(args *pb.SnapshotInstallArgs) {
 		reply, ok := rf.sendInstallSnapshot(server, args)
@@ -1050,7 +1051,7 @@ func (rf *Raft) sendInstallSnapshotToPeerId(server int) {
 				rf.persist()
 				return
 			}
-			laneLog.Logger.Infof("SNAPS Term[%d] [%d] leader success to Send a 📷 to [%d] nextIndex for it [%d] -> [%d] matchIndex [%d] -> [%d]", rf.currentTerm, rf.me, server, rf.nextIndex[server], rf.lastIndex()+1, rf.matchIndex[server], args.LastIncludeIndex)
+			firlog.Logger.Infof("SNAPS Term[%d] [%d] leader success to Send a 📷 to [%d] nextIndex for it [%d] -> [%d] matchIndex [%d] -> [%d]", rf.currentTerm, rf.me, server, rf.nextIndex[server], rf.lastIndex()+1, rf.matchIndex[server], args.LastIncludeIndex)
 			rf.nextIndex[server] = rf.lastIndex() + 1
 			rf.matchIndex[server] = int(args.LastIncludeIndex)
 			rf.updateCommitIndex()
@@ -1124,8 +1125,8 @@ func (rf *Raft) CheckIfDepose() (ret bool) {
 // Make() must return quickly, so it should start goroutines
 // for any long-running work.
 func Make(me int,
-	persister *Persister, applyCh chan ApplyMsg, conf laneConfig.RaftEnds) *Raft {
-	laneLog.Logger.Debugf("raft[%d] start by conf", me, conf)
+	persister *Persister, applyCh chan ApplyMsg, conf firconfig.RaftEnds) *Raft {
+	firlog.Logger.Debugf("raft[%d] start by conf", me, conf)
 	rf := &Raft{}
 
 	rf.persister = persister
@@ -1169,7 +1170,7 @@ func Make(me int,
 	rf.IisBack = false
 	rf.IisBackIndex = -1
 	// Your initialization code here (3A, 3B, 3C).
-	laneLog.Logger.Infof("RESTA Term[%d] [%d] Restart😎", rf.currentTerm, rf.me)
+	firlog.Logger.Infof("RESTA Term[%d] [%d] Restart😎", rf.currentTerm, rf.me)
 	// initialize from state persisted before a crash
 	rf.readPersist(persister.ReadRaftState())
 	// 向application层安装快照
@@ -1190,23 +1191,23 @@ func Make(me int,
 	return rf
 }
 
-func (rt *Raft) StartRaft(conf laneConfig.RaftEnd) {
+func (rt *Raft) StartRaft(conf firconfig.RaftEnd) {
 	// server grpc
 	lis, err := net.Listen("tcp", conf.Addr+conf.Port)
 	if err != nil {
-		laneLog.Logger.Fatalln("error: etcd start faild", err)
+		firlog.Logger.Fatalln("error: etcd start faild", err)
 	}
 	gServer := grpc.NewServer()
 	pb.RegisterRaftServer(gServer, rt)
 	go func() {
 		if err := gServer.Serve(lis); err != nil {
-			laneLog.Logger.Fatalln("failed to serve : ", err.Error())
+			firlog.Logger.Fatalln("failed to serve : ", err.Error())
 		}
 	}()
 }
 
-func WaitConnect(conf laneConfig.RaftEnds) []*RaftEnd {
-	laneLog.Logger.Infoln("start wating...")
+func WaitConnect(conf firconfig.RaftEnds) []*RaftEnd {
+	firlog.Logger.Infoln("start wating...")
 	var wait sync.WaitGroup
 	servers := make([]*RaftEnd, len(conf.Endpoints))
 	wait.Add(len(servers) - 1)
@@ -1215,7 +1216,7 @@ func WaitConnect(conf laneConfig.RaftEnds) []*RaftEnd {
 			continue
 		}
 
-		go func(other int, conf laneConfig.RaftEnd) {
+		go func(other int, conf firconfig.RaftEnd) {
 			defer wait.Done()
 			for {
 				r := NewRaftClient(conf)
@@ -1228,6 +1229,6 @@ func WaitConnect(conf laneConfig.RaftEnds) []*RaftEnd {
 		}(i, conf.Endpoints[i])
 	}
 	wait.Wait()
-	laneLog.Logger.Infof("🦖 All %d Connetct", len(conf.Endpoints))
+	firlog.Logger.Infof("🦖 All %d Connetct", len(conf.Endpoints))
 	return servers
 }

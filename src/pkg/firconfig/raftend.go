@@ -1,4 +1,4 @@
-package laneConfig
+package firconfig
 
 type RaftEnds struct {
 	Me        int

@@ -13,7 +13,7 @@ import (
 	"os"
 	"sync"
 
-	"github.com/whosefriendA/firEtcd/src/firlog"
+	"github.com/whosefriendA/firEtcd/src/pkg/firlog"
 )
 
 type Persister struct {
@@ -44,7 +44,7 @@ func (ps *Persister) ReadRaftState() []byte {
 	data, err := os.ReadFile(ps.basePath + ps.raftstatePath)
 
 	if err != nil {
-		laneLog.Logger.Errorln("read faild", err)
+		firlog.Logger.Errorln("read faild", err)
 		return nil
 	}
 	return data
@@ -55,7 +55,7 @@ func (ps *Persister) RaftStateSize() int {
 	defer ps.mu.Unlock()
 	info, err := os.Stat(ps.basePath + ps.raftstatePath)
 	if err != nil {
-		laneLog.Logger.Panicln("read faild", err)
+		firlog.Logger.Panicln("read faild", err)
 		return 0
 	}
 	return int(info.Size())
@@ -67,7 +67,7 @@ func (ps *Persister) Save(raftstate []byte, snapshot []byte) {
 	if _, err := os.Stat(ps.basePath); os.IsNotExist(err) {
 		err := os.Mkdir(ps.basePath, os.ModePerm)
 		if err != nil {
-			laneLog.Logger.Errorf("could not create dir file: %v", err)
+			firlog.Logger.Errorf("could not create dir file: %v", err)
 		}
 	}
 
@@ -78,31 +78,31 @@ func (ps *Persister) Save(raftstate []byte, snapshot []byte) {
 	if _, err := os.Stat(raftstateTmpPath); os.IsExist(err) {
 		err := os.Remove(raftstateTmpPath)
 		if err != nil {
-			laneLog.Logger.Errorf("could not remove tmp file: %v", err)
+			firlog.Logger.Errorf("could not remove tmp file: %v", err)
 		}
 	}
 	if _, err := os.Stat(snapshotTmpPath); os.IsExist(err) {
 		err := os.Remove(snapshotTmpPath)
 		if err != nil {
-			laneLog.Logger.Errorf("could not remove tmp file: %v", err)
+			firlog.Logger.Errorf("could not remove tmp file: %v", err)
 		}
 	}
 	if err := os.WriteFile(raftstateTmpPath, raftstate, 0644); err != nil {
-		laneLog.Logger.Panicln("write faild", err)
+		firlog.Logger.Panicln("write faild", err)
 		return
 	}
 	if err := os.WriteFile(snapshotTmpPath, snapshot, 0644); err != nil {
-		laneLog.Logger.Panicln("write faild", err)
+		firlog.Logger.Panicln("write faild", err)
 		return
 	}
 
 	// Rename temp files to final filenames
 	if err := os.Rename(raftstateTmpPath, ps.basePath+ps.raftstatePath); err != nil {
-		laneLog.Logger.Panicln("write faild", err)
+		firlog.Logger.Panicln("write faild", err)
 		return
 	}
 	if err := os.Rename(snapshotTmpPath, ps.basePath+ps.snapshotPath); err != nil {
-		laneLog.Logger.Panicln("write faild", err)
+		firlog.Logger.Panicln("write faild", err)
 		return
 	}
 
@@ -113,7 +113,7 @@ func (ps *Persister) ReadSnapshot() []byte {
 	defer ps.mu.Unlock()
 	data, err := os.ReadFile(ps.basePath + ps.snapshotPath)
 	if err != nil {
-		laneLog.Logger.Errorln("read faild", err)
+		firlog.Logger.Errorln("read faild", err)
 		return nil
 	}
 	return data
@@ -124,7 +124,7 @@ func (ps *Persister) SnapshotSize() int {
 	defer ps.mu.Unlock()
 	info, err := os.Stat(ps.basePath + ps.snapshotPath)
 	if err != nil {
-		laneLog.Logger.Errorln("read faild", err)
+		firlog.Logger.Errorln("read faild", err)
 		return 0
 	}
 	return int(info.Size())
