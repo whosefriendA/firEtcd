@@ -6,10 +6,10 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/whosefriendA/firEtcd/common"
+	"github.com/whosefriendA/firEtcd/pkg/firlog"
 	"github.com/whosefriendA/firEtcd/proto/pb"
-	"github.com/whosefriendA/firEtcd/src/common"
-	"github.com/whosefriendA/firEtcd/src/pkg/firlog"
-	"github.com/whosefriendA/firEtcd/src/raft"
+	"github.com/whosefriendA/firEtcd/raft"
 )
 
 type Pipe struct {
