@@ -13,7 +13,7 @@ import (
 	"os"
 	"sync"
 
-	"github.com/whosefriendA/firEtcd/src/pkg/firlog"
+	"github.com/whosefriendA/firEtcd/pkg/firlog"
 )
 
 type Persister struct {

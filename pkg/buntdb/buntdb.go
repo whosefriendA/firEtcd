@@ -7,7 +7,7 @@ import (
 	"time"
 
 	"github.com/tidwall/buntdb"
-	"github.com/whosefriendA/firEtcd/src/common"
+	"github.com/whosefriendA/firEtcd/common"
 )
 
 type DB struct {

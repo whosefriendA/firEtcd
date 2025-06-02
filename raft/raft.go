@@ -23,7 +23,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/gob"
-	"github.com/whosefriendA/firEtcd/src/pkg/firlog"
+	"github.com/whosefriendA/firEtcd/pkg/firlog"
 	"math/rand"
 	"net"
 	"sort"
@@ -31,8 +31,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/whosefriendA/firEtcd/pkg/firconfig"
 	"github.com/whosefriendA/firEtcd/proto/pb"
-	"github.com/whosefriendA/firEtcd/src/pkg/firconfig"
 	"google.golang.org/grpc"
 )
 

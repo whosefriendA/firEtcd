@@ -1,9 +1,9 @@
 package raft
 
 import (
+	"github.com/whosefriendA/firEtcd/pkg/firconfig"
+	"github.com/whosefriendA/firEtcd/pkg/firlog"
 	"github.com/whosefriendA/firEtcd/proto/pb"
-	"github.com/whosefriendA/firEtcd/src/pkg/firconfig"
-	"github.com/whosefriendA/firEtcd/src/pkg/firlog"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 )

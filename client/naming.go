@@ -4,8 +4,8 @@ import (
 	"encoding/json"
 	"time"
 
-	"github.com/whosefriendA/firEtcd/src/kvraft"
-	"github.com/whosefriendA/firEtcd/src/pkg/firlog"
+	"github.com/whosefriendA/firEtcd/kvraft"
+	"github.com/whosefriendA/firEtcd/pkg/firlog"
 )
 
 type Node struct {

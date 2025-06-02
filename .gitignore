@@ -1,0 +1,15 @@
+*bin/
+
+*logs/
+
+infra*
+
+*pConfig/
+
+.excalidraw*
+
+go.sum
+
+*.db
+
+.idea/

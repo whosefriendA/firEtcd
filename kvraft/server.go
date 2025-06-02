@@ -4,17 +4,17 @@ import (
 	"bytes"
 	"context"
 	"encoding/gob"
-	"github.com/whosefriendA/firEtcd/src/firlog"
+	"github.com/whosefriendA/firEtcd/pkg/firlog"
 	"net"
 	"sync"
 	"sync/atomic"
 	"time"
 
+	"github.com/whosefriendA/firEtcd/common"
+	buntdbx "github.com/whosefriendA/firEtcd/pkg/buntdb"
+	"github.com/whosefriendA/firEtcd/pkg/firconfig"
 	"github.com/whosefriendA/firEtcd/proto/pb"
-	buntdbx "github.com/whosefriendA/firEtcd/src/buntdb"
-	"github.com/whosefriendA/firEtcd/src/common"
-	"github.com/whosefriendA/firEtcd/src/config"
-	"github.com/whosefriendA/firEtcd/src/raft"
+	"github.com/whosefriendA/firEtcd/raft"
 
 	"google.golang.org/grpc"
 )

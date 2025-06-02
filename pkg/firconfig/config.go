@@ -1,7 +1,7 @@
 package firconfig
 
 import (
-	"github.com/whosefriendA/firEtcd/src/pkg/firlog"
+	"github.com/whosefriendA/firEtcd/pkg/firlog"
 	"log"
 	"os"
 

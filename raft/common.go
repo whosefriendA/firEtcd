@@ -5,8 +5,8 @@ import (
 	"encoding/gob"
 	"unsafe"
 
-	"github.com/whosefriendA/firEtcd/src/common"
-	"github.com/whosefriendA/firEtcd/src/pkg/firlog"
+	"github.com/whosefriendA/firEtcd/common"
+	"github.com/whosefriendA/firEtcd/pkg/firlog"
 )
 
 type Op struct {

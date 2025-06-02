@@ -10,11 +10,11 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/whosefriendA/firEtcd/common"
+	"github.com/whosefriendA/firEtcd/kvraft"
+	"github.com/whosefriendA/firEtcd/pkg/firconfig"
+	"github.com/whosefriendA/firEtcd/pkg/firlog"
 	"github.com/whosefriendA/firEtcd/proto/pb"
-	"github.com/whosefriendA/firEtcd/src/common"
-	"github.com/whosefriendA/firEtcd/src/kvraft"
-	"github.com/whosefriendA/firEtcd/src/pkg/firconfig"
-	"github.com/whosefriendA/firEtcd/src/pkg/firlog"
 )
 
 var pipeLimit int = 1024 * 4000

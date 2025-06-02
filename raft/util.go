@@ -1,6 +1,6 @@
 package raft
 
-import "github.com/whosefriendA/firEtcd/src/pkg/firlog"
+import "github.com/whosefriendA/firEtcd/pkg/firlog"
 
 // Debugging
 const Debug = true
