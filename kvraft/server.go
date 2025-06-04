@@ -549,7 +549,7 @@ func (kv *KVServer) killed() bool {
 // you don't need to snapshot.
 // StartKVServer() must return quickly, so it should start goroutines
 // for any long-running work.
-func StartKVServer(conf firConfig.Kvserver, me int, persister *raft.Persister, maxraftstate int) *KVServer {
+func StartKVServer(conf firconfig.Kvserver, me int, persister *raft.Persister, maxraftstate int) *KVServer {
 	// call labgob.Register on structures you want
 	// Go's RPC library to marshall/unmarshall.
 	var err error

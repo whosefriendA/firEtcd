@@ -1,6 +1,6 @@
 syntax = "proto3";
 
-package lane.pb;
+package fir.pb;
 option go_package = "firEtcd/proto/pb;pb";
 
 message RequestVoteArgs {

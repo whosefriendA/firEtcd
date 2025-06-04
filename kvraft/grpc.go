@@ -1,7 +1,7 @@
 package kvraft
 
 import (
-	"github.com/whosefriendA/firEtcd/firlog"
+	"github.com/whosefriendA/firEtcd/pkg/firlog"
 	"github.com/whosefriendA/firEtcd/proto/pb"
 
 	"google.golang.org/grpc"
