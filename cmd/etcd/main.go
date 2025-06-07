@@ -29,5 +29,5 @@ func main() {
 
 	firlog.InitLogger("kvserver", true, false, false)
 	_ = kvraft.StartKVServer(conf, conf.Rafts.Me, raft.MakePersister("/raftstate.dat", "/snapshot.dat", conf.DataBasePath), conf.Maxraftstate)
-	select {}
+	select {} //阻塞主进程
 }

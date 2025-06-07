@@ -57,7 +57,7 @@ func ReadLocal(Path string, conf LaneConfig) error {
 	log.Println("read from ", Path)
 	data, err := os.ReadFile(Path)
 	if err != nil {
-		firlog.Logger.Fatalln("config.yaml does not exist")
+		firlog.Logger.Fatalln("config.yml does not exist")
 	}
 
 	err = yaml.Unmarshal(data, conf)

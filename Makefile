@@ -20,13 +20,13 @@ build:
 run:
 	for i in $(shell seq 1 $(N)); do \
 		echo "Running etcd$$i..."; \
-		(cd bin/etcd/ && ./etcd -c ../../config/etcd$$i/config.yml) & \
+		(cd bin/etcd/ && ./etcd -c ../../config/node$$i/config.yml) & \
 	done
 
 runp:
 	for i in $(shell seq 1 $(PN)); do \
 		echo "Running etcd$$i..."; \
-		(cd bin/etcd/ && ./etcd -c ../../pConfig/etcd$$i/config.yml) & \
+		(cd bin/etcd/ && ./etcd -c ../../pConfig/node$$i/config.yml) & \
 	done
 
 stop:
