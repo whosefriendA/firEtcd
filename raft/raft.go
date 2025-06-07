@@ -1229,6 +1229,6 @@ func WaitConnect(conf firconfig.RaftEnds) []*RaftEnd {
 		}(i, conf.Endpoints[i])
 	}
 	wait.Wait()
-	firlog.Logger.Infof("🦖 All %d Connetct", len(conf.Endpoints))
+	firlog.Logger.Infof("🦖 All %d Connect", len(conf.Endpoints))
 	return servers
 }
