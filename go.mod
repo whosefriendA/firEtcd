@@ -1,7 +1,5 @@
 module github.com/whosefriendA/firEtcd
 
-replace github.com/whosefriendA/firEtcd => ../firEtcd
-
 go 1.23.1
 
 require (
