@@ -12,9 +12,9 @@ import (
 )
 
 // func init() {
-// 	conf := laneConfig.Gateway{}
-// 	laneConfig.Init("config.yml", &conf)
-// 	// laneLog.Logger.Debugln("check conf", conf)
+// 	conf := firConfig.Gateway{}
+// 	firConfig.Init("config.yml", &conf)
+// 	// firLog.Logger.Debugln("check conf", conf)
 // 	ck = client.MakeClerk(conf.Clerk)
 // }
 
@@ -37,7 +37,7 @@ func NewGateway(conf firconfig.Gateway) *Gateway {
 }
 
 // realurl = baseUrl + '/keys' | '/put' act...
-// default baseUrl = '/laneEtcd'
+// default baseUrl = '/firEtcd'
 func (g *Gateway) Run() error {
 	r := gin.Default()
 	r.GET(g.conf.BaseUrl+"/keys", g.keys)
@@ -77,7 +77,7 @@ func (g *Gateway) keys(c *gin.Context) {
 			pairs[i].DeadTime = cpairs[i].Entry.DeadTime
 		}
 		c.JSON(http.StatusOK, common.Respond{Code: http.StatusOK, Data: pairs})
-
+	//TODO keys page
 	case "page":
 
 	default:
@@ -101,7 +101,7 @@ func (g *Gateway) kvs(c *gin.Context) {
 			pairs[i].DeadTime = cpairs[i].Entry.DeadTime
 		}
 		c.JSON(http.StatusOK, common.Respond{Code: http.StatusOK, Data: pairs})
-
+	//TODO kvs page
 	case "page":
 		c.JSON(http.StatusOK, common.Respond{Code: http.StatusOK, Data: gin.H{"msg": "wrong type"}})
 

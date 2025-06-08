@@ -16,6 +16,6 @@ func DefaultGateway() Gateway {
 		Clerk:   DefaultClerk(),
 		Addr:    "127.0.0.1",
 		Port:    ":51030",
-		BaseUrl: "/laneEtcd",
+		BaseUrl: "/firEtcd",
 	}
 }

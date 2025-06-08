@@ -49,7 +49,7 @@ func (c *Clerk) watchEtcd() {
 				k := kvraft.NewKvClient(c.conf.EtcdAddrs[i])
 				if k != nil {
 					c.servers[i] = k
-					// laneLog.Logger.Warnf("update etcd server[%d] addr[%s]", i, c.conf.EtcdAddrs[i])
+					// firLog.Logger.Warnf("update etcd server[%d] addr[%s]", i, c.conf.EtcdAddrs[i])
 				}
 			}
 		}
@@ -143,7 +143,7 @@ func (ck *Clerk) read(args *pb.GetArgs) ([][]byte, error) {
 			}
 		}
 
-		// laneLog.Logger.Infof("clinet [%d] [Get]:send[%d] args[%v]", ck.clientId, ck.nextSendLocalId, args)
+		// firLog.Logger.Infof("clinet [%d] [Get]:send[%d] args[%v]", ck.clientId, ck.nextSendLocalId, args)
 		var validCount = 0
 		for !ck.servers[ck.nextSendLocalId].Valid {
 			ck.changeNextSendId()
@@ -163,7 +163,7 @@ func (ck *Clerk) read(args *pb.GetArgs) ([][]byte, error) {
 
 		lastSendLocalId = ck.nextSendLocalId
 		if err != nil {
-			// laneLog.Logger.Infof("clinet [%d] [Get]:[lost] args[%v]", ck.clientId, args)
+			// firLog.Logger.Infof("clinet [%d] [Get]:[lost] args[%v]", ck.clientId, args)
 			//对面失联，那就换下一个继续发
 			ck.changeNextSendId()
 			continue
@@ -174,18 +174,18 @@ func (ck *Clerk) read(args *pb.GetArgs) ([][]byte, error) {
 		switch reply.Err {
 		case kvraft.ErrOK:
 			ck.LatestOffset++
-			// laneLog.Logger.Infof("clinet [%d] [Get]:[OK] get args[%v] reply[%v]", ck.clientId, args, reply)
+			// firLog.Logger.Infof("clinet [%d] [Get]:[OK] get args[%v] reply[%v]", ck.clientId, args, reply)
 			if len(reply.Value) == 0 {
 				return nil, kvraft.ErrNil
 			}
 
 			return reply.Value, nil
 		case kvraft.ErrNoKey:
-			// laneLog.Logger.Infof("clinet [%d] [Get]:[ErrNo key] get args[%v]", ck.clientId, args)
+			// firLog.Logger.Infof("clinet [%d] [Get]:[ErrNo key] get args[%v]", ck.clientId, args)
 			ck.LatestOffset++
 			return nil, kvraft.ErrNil
 		case kvraft.ErrWrongLeader:
-			// laneLog.Logger.Infof("clinet [%d] [Get]:[ErrWrong LeaderId][%d] get args[%v] reply[%v]", ck.clientId, ck.nextSendLocalId, args, reply)
+			// firLog.Logger.Infof("clinet [%d] [Get]:[ErrWrong LeaderId][%d] get args[%v] reply[%v]", ck.clientId, ck.nextSendLocalId, args, reply)
 			//对方也不知道leader
 			if reply.LeaderId == -1 {
 				//寻找下一个
@@ -200,7 +200,7 @@ func (ck *Clerk) read(args *pb.GetArgs) ([][]byte, error) {
 
 			}
 		case kvraft.ErrWaitForRecover:
-			// laneLog.Logger.Infof("client [%d] [Get]:[Wait for leader recover]", ck.clientId)
+			// firLog.Logger.Infof("client [%d] [Get]:[Wait for leader recover]", ck.clientId)
 			time.Sleep(time.Millisecond * 200)
 		default:
 			firlog.Logger.Fatalf("Client [%d] Get reply unknown err [%s](probaly not init)", ck.clientId, reply.Err)
@@ -260,19 +260,19 @@ func (ck *Clerk) write(key string, value, oriValue []byte, TTL time.Duration, op
 			}
 		}
 		if validCount == len(ck.servers) {
-			// laneLog.Logger.Infoln("not exist valid etcd server")
+			// firLog.Logger.Infoln("not exist valid etcd server")
 			time.Sleep(time.Millisecond * 10)
 			continue
 		}
 
-		// laneLog.Logger.Infof("clinet [%d] [PutAppend]:send[%d] args[%v]", ck.clientId, ck.nextSendLocalId, args.String())
+		// firLog.Logger.Infof("clinet [%d] [PutAppend]:send[%d] args[%v]", ck.clientId, ck.nextSendLocalId, args.String())
 		reply, err := ck.servers[ck.nextSendLocalId].Conn.PutAppend(context.Background(), &args)
-		// laneLog.Logger.Debugln("receive etcd:", reply.String(), err)
+		// firLog.Logger.Debugln("receive etcd:", reply.String(), err)
 		//根据reply初始化一下本地server表
 
 		lastSendLocalId = ck.nextSendLocalId
 		if err != nil {
-			// laneLog.Logger.Infof("clinet [%d] [PutAppend]:[lost] args[%v] err:", ck.clientId, args, err)
+			// firLog.Logger.Infof("clinet [%d] [PutAppend]:[lost] args[%v] err:", ck.clientId, args, err)
 			//对面失联，那就换下一个继续发
 			ck.changeNextSendId()
 			continue
@@ -283,17 +283,17 @@ func (ck *Clerk) write(key string, value, oriValue []byte, TTL time.Duration, op
 		switch reply.Err {
 		case kvraft.ErrOK:
 			ck.LatestOffset++
-			// laneLog.Logger.Infof("clinet [%d] [Get]:[OK] get args[%v] reply[%v]", ck.clientId, args, reply)
+			// firLog.Logger.Infof("clinet [%d] [Get]:[OK] get args[%v] reply[%v]", ck.clientId, args, reply)
 			return nil
 		case kvraft.ErrNoKey:
-			// laneLog.Logger.Infof("clinet [%d] [Get]:[ErrNo key] get args[%v]", ck.clientId, args)
+			// firLog.Logger.Infof("clinet [%d] [Get]:[ErrNo key] get args[%v]", ck.clientId, args)
 			ck.LatestOffset++
 			return kvraft.ErrNil
 		case kvraft.ErrCasFaildInt:
 			ck.LatestOffset++
 			return kvraft.ErrCASFaild
 		case kvraft.ErrWrongLeader:
-			// laneLog.Logger.Infof("clinet [%d] [PutAppend]:[ErrWrong LeaderId][%d] get args[%v] reply[%v]", ck.clientId, ck.nextSendLocalId, args, reply)
+			// firLog.Logger.Infof("clinet [%d] [PutAppend]:[ErrWrong LeaderId][%d] get args[%v] reply[%v]", ck.clientId, ck.nextSendLocalId, args, reply)
 			//对方也不知道leader
 			if reply.LeaderId == -1 {
 				//寻找下一个

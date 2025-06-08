@@ -60,7 +60,7 @@ func GetNode(ck *Clerk, name string) ([]*Node, error) {
 		firlog.Logger.Fatalln(err)
 		return nil, err
 	}
-	// laneLog.Logger.Debugln("raw data:", datas)
+	// firLog.Logger.Debugln("raw data:", datas)
 	nodes := make([]*Node, len(datas))
 	for i := range datas {
 		n := &Node{}

@@ -8,23 +8,23 @@ import (
 	yaml "gopkg.in/yaml.v3"
 )
 
-type LaneConfig interface {
+type Firconfig interface {
 	Default()
 }
 
 // TODO etcd dynamic config
 
-func WriteRemote(conf LaneConfig) error {
+func WriteRemote(conf Firconfig) error {
 
 	return nil
 }
 
 // TODO etcd dynamic config
-func ReadRemote(conf LaneConfig) {
+func ReadRemote(conf Firconfig) {
 
 }
 
-func Init(Path string, conf LaneConfig) {
+func Init(Path string, conf Firconfig) {
 	_, err := os.Stat(Path)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -38,7 +38,7 @@ func Init(Path string, conf LaneConfig) {
 	ReadLocal(Path, conf)
 }
 
-func WriteLocal(Path string, conf LaneConfig) error {
+func WriteLocal(Path string, conf Firconfig) error {
 	out, err := yaml.Marshal(conf)
 	if err != nil {
 		firlog.Logger.Fatalln("failed to marshal config", Path, ":", err)
@@ -53,7 +53,7 @@ func WriteLocal(Path string, conf LaneConfig) error {
 	return nil
 }
 
-func ReadLocal(Path string, conf LaneConfig) error {
+func ReadLocal(Path string, conf Firconfig) error {
 	log.Println("read from ", Path)
 	data, err := os.ReadFile(Path)
 	if err != nil {
