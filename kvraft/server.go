@@ -451,14 +451,10 @@ func (kv *KVServer) HandleApplychSnapshot(raft_type raft.ApplyMsg) {
 	kv.readPersist(snapshot)
 	firlog.Logger.Infof("server [%d] passive📷 lastAppliedIndex[%d] -> [%d]", kv.me, kv.lastAppliedIndex, raft_type.SnapshotIndex)
 	kv.lastAppliedIndex = raft_type.SnapshotIndex
-	for {
-		select {
-		case kv.lastIndexCh <- raft_type.CommandIndex:
-		default:
-			goto SNAPBREAK
-		}
+	select {
+	case kv.lastIndexCh <- raft_type.CommandIndex:
+	default:
 	}
-SNAPBREAK:
 }
 
 // 主动快照,每一个服务器都在自己log超标的时候启动快照
