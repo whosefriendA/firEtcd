@@ -108,6 +108,35 @@ func (d *DB) GetEntryWithPrefix(prefix string) (ret []common.Entry, err error) {
 	return
 }
 
+func (d *DB) GetPairsWithPrefix(prefix string) (ret []common.Pair, err error) {
+	ret = make([]common.Pair, 0, 1)
+
+	err = d.db.View(func(tx *buntdb.Tx) error {
+		// Use AscendKeys to iterate over keys with the specified prefix
+		return tx.AscendKeys(prefix+"*", func(key, value string) bool {
+			data := common.StringToBytes(value)
+			s := bytes.NewBuffer(data)
+			dec := gob.NewDecoder(s)
+
+			// Create a new Pair with the full key
+			pair := common.Pair{Key: key}
+
+			// Decode the value into the Entry part of the Pair
+			err = dec.Decode(&pair.Entry)
+			if err != nil {
+				// If decoding fails, stop the iteration
+				return false
+			}
+
+			// Append the complete pair to the result slice
+			ret = append(ret, pair)
+
+			// Continue iteration
+			return true
+		})
+	})
+	return
+}
 func (d *DB) Put(key string, value []byte, DeadTime int64) error {
 	return d.db.Update(func(tx *buntdb.Tx) error {
 		if DeadTime != 0 {

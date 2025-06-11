@@ -33,6 +33,7 @@ type DB interface {
 	GetWithPrefix(prefix string) ([][]byte, error)
 	GetEntry(key string) (Entry, error)
 	GetEntryWithPrefix(key string) ([]Entry, error)
+	GetPairsWithPrefix(prefix string) ([]Pair, error)
 	PutEntry(key string, entry Entry) error
 	Keys(pageSize, pageIndex int) ([]Pair, error)
 	KVs(pageSize, pageIndex int) ([]Pair, error)
