@@ -18,9 +18,7 @@ func Test_nrand(t *testing.T) {
 	tests := []struct {
 		name string
 		want int64
-	}{
-		// TODO: Add test cases.
-	}
+	}{}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			if got := nrand(); got != tt.want {
@@ -38,9 +36,7 @@ func TestWithSendInitialState(t *testing.T) {
 		name string
 		args args
 		want WatchOption
-	}{
-		// TODO: Add test cases.
-	}
+	}{}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			if got := WithSendInitialState(tt.args.send); !reflect.DeepEqual(got, tt.want) {
@@ -54,9 +50,7 @@ func TestWithPrefix(t *testing.T) {
 	tests := []struct {
 		name string
 		want WatchOption
-	}{
-		// TODO: Add test cases.
-	}
+	}{}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			if got := WithPrefix(); !reflect.DeepEqual(got, tt.want) {
@@ -136,9 +130,7 @@ func TestClerk_manageWatchStream(t *testing.T) {
 		name   string
 		fields fields
 		args   args
-	}{
-		// TODO: Add test cases.
-	}
+	}{}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			ck := &Clerk{
@@ -164,9 +156,7 @@ func Test_shouldRetry(t *testing.T) {
 		name string
 		args args
 		want bool
-	}{
-		// TODO: Add test cases.
-	}
+	}{}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			if got := shouldRetry(tt.args.code); got != tt.want {
@@ -190,9 +180,7 @@ func TestClerk_watchEtcd(t *testing.T) {
 	tests := []struct {
 		name   string
 		fields fields
-	}{
-		// TODO: Add test cases.
-	}
+	}{}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			c := &Clerk{
@@ -218,9 +206,7 @@ func TestMakeClerk(t *testing.T) {
 		name string
 		args args
 		want *Clerk
-	}{
-		// TODO: Add test cases.
-	}
+	}{}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			if got := MakeClerk(tt.args.conf); !reflect.DeepEqual(got, tt.want) {
@@ -251,9 +237,7 @@ func TestClerk_doGetValue(t *testing.T) {
 		args    args
 		want    [][]byte
 		wantErr bool
-	}{
-		// TODO: Add test cases.
-	}
+	}{}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			ck := &Clerk{
@@ -302,9 +286,7 @@ func TestClerk_doGetKV(t *testing.T) {
 		args    args
 		want    []common.Pair
 		wantErr bool
-	}{
-		// TODO: Add test cases.
-	}
+	}{}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			ck := &Clerk{
@@ -349,9 +331,7 @@ func TestClerk_read(t *testing.T) {
 		args    args
 		want    [][]byte
 		wantErr bool
-	}{
-		// TODO: Add test cases.
-	}
+	}{}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			ck := &Clerk{
@@ -399,9 +379,7 @@ func TestClerk_write(t *testing.T) {
 		fields  fields
 		args    args
 		wantErr bool
-	}{
-		// TODO: Add test cases.
-	}
+	}{}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			ck := &Clerk{
@@ -435,9 +413,7 @@ func TestClerk_changeNextSendId(t *testing.T) {
 	tests := []struct {
 		name   string
 		fields fields
-	}{
-		// TODO: Add test cases.
-	}
+	}{}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			ck := &Clerk{
@@ -476,9 +452,7 @@ func TestClerk_Put(t *testing.T) {
 		fields  fields
 		args    args
 		wantErr bool
-	}{
-		// TODO: Add test cases.
-	}
+	}{}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			ck := &Clerk{
@@ -519,9 +493,7 @@ func TestClerk_Append(t *testing.T) {
 		fields  fields
 		args    args
 		wantErr bool
-	}{
-		// TODO: Add test cases.
-	}
+	}{}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			ck := &Clerk{
@@ -560,9 +532,7 @@ func TestClerk_Delete(t *testing.T) {
 		fields  fields
 		args    args
 		wantErr bool
-	}{
-		// TODO: Add test cases.
-	}
+	}{}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			ck := &Clerk{
@@ -601,9 +571,7 @@ func TestClerk_DeleteWithPrefix(t *testing.T) {
 		fields  fields
 		args    args
 		wantErr bool
-	}{
-		// TODO: Add test cases.
-	}
+	}{}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			ck := &Clerk{
@@ -646,9 +614,7 @@ func TestClerk_CAS(t *testing.T) {
 		args    args
 		want    bool
 		wantErr bool
-	}{
-		// TODO: Add test cases.
-	}
+	}{}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			ck := &Clerk{
@@ -692,9 +658,7 @@ func TestClerk_batchWrite(t *testing.T) {
 		fields  fields
 		args    args
 		wantErr bool
-	}{
-		// TODO: Add test cases.
-	}
+	}{}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			ck := &Clerk{
@@ -707,8 +671,8 @@ func TestClerk_batchWrite(t *testing.T) {
 				conf:            tt.fields.conf,
 				mu:              tt.fields.mu,
 			}
-			if err := ck.batchWrite(tt.args.p); (err != nil) != tt.wantErr {
-				t.Errorf("Clerk.batchWrite() error = %v, wantErr %v", err, tt.wantErr)
+			if err := ck.BatchWrite(tt.args.p); (err != nil) != tt.wantErr {
+				t.Errorf("Clerk.BatchWrite() error = %v, wantErr %v", err, tt.wantErr)
 			}
 		})
 	}
@@ -729,9 +693,7 @@ func TestClerk_Pipeline(t *testing.T) {
 		name   string
 		fields fields
 		want   *Pipe
-	}{
-		// TODO: Add test cases.
-	}
+	}{}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			ck := &Clerk{
@@ -771,9 +733,7 @@ func TestClerk_Get(t *testing.T) {
 		args    args
 		want    []byte
 		wantErr bool
-	}{
-		// TODO: Add test cases.
-	}
+	}{}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			ck := &Clerk{
@@ -818,9 +778,7 @@ func TestClerk_GetWithPrefix(t *testing.T) {
 		args    args
 		want    [][]byte
 		wantErr bool
-	}{
-		// TODO: Add test cases.
-	}
+	}{}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			ck := &Clerk{
@@ -861,9 +819,7 @@ func TestClerk_Keys(t *testing.T) {
 		fields  fields
 		want    []common.Pair
 		wantErr bool
-	}{
-		// TODO: Add test cases.
-	}
+	}{}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			ck := &Clerk{
@@ -904,9 +860,7 @@ func TestClerk_KVs(t *testing.T) {
 		fields  fields
 		want    []common.Pair
 		wantErr bool
-	}{
-		// TODO: Add test cases.
-	}
+	}{}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			ck := &Clerk{
@@ -952,9 +906,7 @@ func TestClerk_KeysWithPage(t *testing.T) {
 		args    args
 		want    []common.Pair
 		wantErr bool
-	}{
-		// TODO: Add test cases.
-	}
+	}{}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			ck := &Clerk{
@@ -1000,9 +952,7 @@ func TestClerk_KVsWithPage(t *testing.T) {
 		args    args
 		want    []common.Pair
 		wantErr bool
-	}{
-		// TODO: Add test cases.
-	}
+	}{}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			ck := &Clerk{
@@ -1048,9 +998,7 @@ func TestClerk_Lock(t *testing.T) {
 		args    args
 		wantId  string
 		wantErr bool
-	}{
-		// TODO: Add test cases.
-	}
+	}{}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			ck := &Clerk{
@@ -1096,9 +1044,7 @@ func TestClerk_Unlock(t *testing.T) {
 		args    args
 		want    bool
 		wantErr bool
-	}{
-		// TODO: Add test cases.
-	}
+	}{}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			ck := &Clerk{
