@@ -1,5 +1,7 @@
 package client
 
+//go:generate mockgen -source=interface.go -destination=../mocks/mock_client.go -package=mocks
+
 import (
 	"context"
 	"time"
@@ -55,6 +57,10 @@ type Querier interface {
 	KVsWithPage(pageSize, pageIndex int) ([]common.Pair, error)
 }
 
+type WatchDoger interface {
+	WatchDog(key string, value []byte) (cancel func())
+}
+
 // --- 静态检查 ---
 // 确保 *Clerk 类型实现了我们定义的所有角色接口。
 var _ KVStore = (*Clerk)(nil)
@@ -63,3 +69,4 @@ var _ Pipeliner = (*Clerk)(nil)
 var _ BatchWriter = (*Clerk)(nil)
 var _ Watcher = (*Clerk)(nil)
 var _ Querier = (*Clerk)(nil)
+var _ WatchDoger = (*Clerk)(nil)
