@@ -14,7 +14,26 @@ func TestStringToBytes(t *testing.T) {
 		args args
 		want []byte
 	}{
-		// TODO: Add test cases.
+		{
+			name: "Basic string",
+			args: args{s: "hello"},
+			want: []byte("hello"),
+		},
+		{
+			name: "Empty string",
+			args: args{s: ""},
+			want: nil,
+		},
+		{
+			name: "String with special characters",
+			args: args{s: "!@#$%^&*()123"},
+			want: []byte("!@#$%^&*()123"),
+		},
+		{
+			name: "String with Unicode characters",
+			args: args{s: "你好, world"},
+			want: []byte("你好, world"),
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -34,7 +53,31 @@ func TestBytesToString(t *testing.T) {
 		args args
 		want string
 	}{
-		// TODO: Add test cases.
+		{
+			name: "Basic byte slice",
+			args: args{b: []byte("hello")},
+			want: "hello",
+		},
+		{
+			name: "Nil byte slice",
+			args: args{b: nil},
+			want: "",
+		},
+		{
+			name: "Empty byte slice",
+			args: args{b: []byte{}},
+			want: "",
+		},
+		{
+			name: "Byte slice with special characters",
+			args: args{b: []byte("!@#$%^&*()123")},
+			want: "!@#$%^&*()123",
+		},
+		{
+			name: "Byte slice with Unicode characters",
+			args: args{b: []byte("你好, world")},
+			want: "你好, world",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
