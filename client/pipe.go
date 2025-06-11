@@ -13,9 +13,10 @@ import (
 )
 
 type Pipe struct {
-	ops  []raft.Op
+	Ops  []raft.Op
 	size int
-	ck   *Clerk
+	//ck   *Clerk
+	ck BatchWriter
 }
 
 func (p *Pipe) Size() int {
@@ -25,7 +26,7 @@ func (p *Pipe) Size() int {
 func (p *Pipe) Marshal() []byte {
 	b := new(bytes.Buffer)
 	e := gob.NewEncoder(b)
-	e.Encode(p.ops)
+	e.Encode(p.Ops)
 	return b.Bytes()
 }
 
@@ -37,7 +38,7 @@ func (p *Pipe) UnMarshal(data []byte) {
 	if err != nil {
 		firlog.Logger.Fatalln("raw data:", data, err)
 	}
-	p.ops = ops
+	p.Ops = ops
 }
 
 func (p *Pipe) Delete(key string) error {
@@ -83,7 +84,7 @@ func (p *Pipe) Append(key string, value []byte, TTL time.Duration) error {
 }
 
 func (p *Pipe) append(op raft.Op) error {
-	p.ops = append(p.ops, op)
+	p.Ops = append(p.Ops, op)
 	p.size += op.Size()
 	if p.size > pipeLimit {
 		return fmt.Errorf("too many pipeline data maxLimit:%d", pipeLimit)
@@ -92,5 +93,17 @@ func (p *Pipe) append(op raft.Op) error {
 }
 
 func (p *Pipe) Exec() error {
-	return p.ck.batchWrite(p)
+	if len(p.Ops) == 0 { // 假设字段是公开的 Ops
+		return nil
+	}
+
+	return p.ck.BatchWrite(p)
+}
+
+func NewPipe(ck BatchWriter) *Pipe {
+	return &Pipe{
+		ck:   ck,
+		Ops:  make([]raft.Op, 0),
+		size: 0, // 根据你的实际实现初始化
+	}
 }
