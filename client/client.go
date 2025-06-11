@@ -545,7 +545,7 @@ func (ck *Clerk) CAS(key string, origin, dest []byte, TTL time.Duration) (bool, 
 	return true, nil
 }
 
-func (ck *Clerk) batchWrite(p *Pipe) error {
+func (ck *Clerk) BatchWrite(p *Pipe) error {
 	return ck.write("", p.Marshal(), nil, 0, int32(pb.OpType_BatchT))
 }
 
