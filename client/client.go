@@ -5,6 +5,9 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/gob"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+	"io"
 	"math/big"
 	"sync"
 	"time"
@@ -31,6 +34,8 @@ type Clerk struct {
 	mu              sync.Mutex
 }
 
+type WatchEventChan <-chan *pb.WatchResponse
+
 func nrand() int64 {
 	max := big.NewInt(int64(1) << 62)
 	bigx, _ := rand.Int(rand.Reader, max)
@@ -38,8 +43,202 @@ func nrand() int64 {
 	return x
 }
 
-func (c *Clerk) watchEtcd() {
+type WatchEvent pb.WatchResponse
 
+// WatchOption 定义了 Watch 请求的可选参数。
+type WatchOption func(*pb.WatchRequest)
+
+// WithSendInitialState 是一个 WatchOption，用于请求在 Watch 开始时发送初始状态。
+func WithSendInitialState(send bool) WatchOption {
+	return func(req *pb.WatchRequest) {
+		req.SendInitialState = send
+	}
+}
+
+// WithPrefix 是一个 WatchOption，用于指定 Watch 的键是否为前缀。
+func WithPrefix() WatchOption {
+	return func(req *pb.WatchRequest) {
+		req.IsPrefix = true
+	}
+}
+
+const (
+	watchRetryInitialBackoff = 500 * time.Millisecond
+	watchRetryMaxBackoff     = 30 * time.Second
+	watchRetryMultiplier     = 2
+	watchEventBufferSize     = 100 // Buffer size for the event channel returned to the application
+)
+
+func (ck *Clerk) Watch(ctx context.Context, key string, opts ...WatchOption) (<-chan *WatchEvent, error) {
+	watchReq := &pb.WatchRequest{
+		Key:              []byte(key),
+		IsPrefix:         false, // Default, overridden by WithPrefix
+		SendInitialState: false, // Default, overridden by WithSendInitialState
+	}
+	for _, opt := range opts {
+		opt(watchReq)
+	}
+
+	eventChan := make(chan *WatchEvent, watchEventBufferSize)
+
+	go ck.manageWatchStream(ctx, key, watchReq, eventChan)
+
+	// Note: This Watch() returns immediately. Errors during stream establishment
+	// or subsequent errors will result in eventChan being closed.
+	// If an immediate, unrecoverable error during the *very first* connection attempt
+	// is desired to be returned directly from Watch(), the initial connection logic
+	// would need to be partially synchronous here, which adds complexity.
+	// The current model (async goroutine, errors close channel) is common for watches.
+	return eventChan, nil
+}
+
+func (ck *Clerk) manageWatchStream(ctx context.Context, watchKeyStr string, req *pb.WatchRequest, eventChan chan<- *WatchEvent) {
+	defer close(eventChan)
+
+	currentBackoff := watchRetryInitialBackoff
+	serverIdx := -1 // Start with no specific server, find one.
+
+	for {
+		select {
+		case <-ctx.Done():
+			firlog.Logger.Infof("Watch for key '%s' cancelled by context before stream attempt: %v", watchKeyStr, ctx.Err())
+			return
+		default:
+		}
+
+		var stream pb.Kvserver_WatchClient
+		var err error
+		var currentKvClient *kvraft.KVClient
+
+		// --- Begin critical section for server selection ---
+		ck.mu.Lock()
+		if serverIdx == -1 { // First attempt or after a leaderless error
+			serverIdx = ck.nextSendLocalId
+		}
+
+		// Try to find a valid server, similar to read/write, but adapted for streaming
+		initialAttemptIdx := serverIdx
+		for i := 0; i < len(ck.servers); i++ {
+			targetIdx := (initialAttemptIdx + i) % len(ck.servers)
+			if ck.servers[targetIdx].Valid && ck.servers[targetIdx].Conn != nil {
+				currentKvClient = ck.servers[targetIdx]
+				serverIdx = targetIdx // Remember the server we are trying
+				break
+			}
+		}
+		ck.mu.Unlock()
+		// --- End critical section for server selection ---
+
+		if currentKvClient == nil {
+			//firlog.Logger.Warnf("Watch for key '%s': No valid servers found, retrying after backoff.", watchKeyStr)
+			goto handle_error_and_retry
+		}
+
+		//firlog.Logger.Infof("Attempting to establish watch stream for key '%s' with server %d (local index %d)", watchKeyStr, currentKvClient.me, serverIdx)
+		stream, err = currentKvClient.Conn.Watch(ctx, req) // Use the main context for the gRPC call
+
+		if err != nil {
+			//firlog.Logger.Warnf("Watch for key '%s': Failed to establish stream with server %s: %v", watchKeyStr, currentKvClient.Addr, err)
+			// Handle gRPC error status
+			if s, ok := status.FromError(err); ok {
+				if s.Code() == codes.FailedPrecondition { // Likely ErrWrongLeader or server not ready
+					// Try to parse leader hint if available (not standard in gRPC error details, but server might provide)
+					// For now, assume it's a generic "try another server"
+					//firlog.Logger.Infof("Watch for key '%s': Server %s indicated not leader or not ready. Trying next.", watchKeyStr, currentKvClient.Addr)
+					ck.mu.Lock()
+					ck.changeNextSendId()          // Rotate to next server for next attempt
+					serverIdx = ck.nextSendLocalId // Update serverIdx for next loop
+					ck.mu.Unlock()
+					currentBackoff = watchRetryInitialBackoff // Reset backoff if it's a leader issue
+					goto handle_error_and_retry_no_wait       // Retry immediately with new server
+				}
+			}
+			// For other initial connection errors, proceed to backoff
+			goto handle_error_and_retry
+		}
+
+		//firlog.Logger.Infof("Watch stream established for key '%s' with server %s.", watchKeyStr, currentKvClient.me)
+		currentBackoff = watchRetryInitialBackoff // Reset backoff on successful connection
+
+		// Receive loop
+		for {
+			resp, recvErr := stream.Recv()
+			if recvErr != nil {
+				if recvErr == io.EOF {
+					//firlog.Logger.Infof("Watch stream for key '%s' closed by server %s (EOF).", watchKeyStr, currentKvClient.Addr)
+				} else {
+					//firlog.Logger.Warnf("Watch stream for key '%s' on server %s Recv error: %v.", watchKeyStr, currentKvClient.Addr, recvErr)
+				}
+				// Any error from Recv() means the stream is broken, try to re-establish.
+				// Update server validity if connection seems truly lost (e.g. Unavailable)
+				if s, ok := status.FromError(recvErr); ok && s.Code() == codes.Unavailable {
+					ck.mu.Lock()
+					if ck.servers[serverIdx] == currentKvClient { // Check if it's still the same client instance
+						ck.servers[serverIdx].Valid = false // Mark as potentially invalid
+						if ck.servers[serverIdx].Realconn != nil {
+							ck.servers[serverIdx].Realconn.Close() // Close the underlying connection
+							ck.servers[serverIdx].Realconn = nil
+						}
+					}
+					ck.mu.Unlock()
+				}
+				goto handle_error_and_retry // Break recv_loop and go to retry logic
+			}
+
+			event := (*WatchEvent)(resp)
+			select {
+			case eventChan <- event:
+				// Event sent
+			case <-ctx.Done():
+				firlog.Logger.Infof("Watch for key '%s' cancelled by context while sending event: %v.", watchKeyStr, ctx.Err())
+				// stream.CloseSend() // Optional: attempt to signal server
+				return // Exit goroutine
+			}
+		}
+
+	handle_error_and_retry:
+		// Non-blocking check for context cancellation before sleeping
+		select {
+		case <-ctx.Done():
+			firlog.Logger.Infof("Watch for key '%s' cancelled by context during retry/backoff: %v.", watchKeyStr, ctx.Err())
+			return
+		default:
+		}
+
+		firlog.Logger.Infof("Watch for key '%s': Retrying after %v.", watchKeyStr, currentBackoff)
+		time.Sleep(currentBackoff)
+		currentBackoff *= watchRetryMultiplier
+		if currentBackoff > watchRetryMaxBackoff {
+			currentBackoff = watchRetryMaxBackoff
+		}
+		// serverIdx will be re-evaluated or kept for next attempt
+		continue // Continue the outer loop to retry connection
+
+	handle_error_and_retry_no_wait: // For cases like wrong leader where we want to try next server immediately
+		select {
+		case <-ctx.Done():
+			firlog.Logger.Infof("Watch for key '%s' cancelled by context during immediate retry: %v.", watchKeyStr, ctx.Err())
+			return
+		default:
+		}
+		continue
+
+	} // End of main retry loop
+}
+
+// Helper to check if a gRPC error code suggests a retry
+// This is a simplified example; more sophisticated logic might be needed.
+func shouldRetry(code codes.Code) bool {
+	switch code {
+	case codes.Unavailable, codes.DeadlineExceeded, codes.ResourceExhausted, codes.Internal, codes.Unknown:
+		return true
+	case codes.FailedPrecondition: // This might be a leader issue, client should try another server
+		return true
+	default:
+		return false
+	}
+}
+func (c *Clerk) watchEtcd() {
 	for {
 		for i, kvclient := range c.servers {
 			if !kvclient.Valid {

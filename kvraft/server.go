@@ -6,6 +6,7 @@ import (
 	"encoding/gob"
 	"github.com/whosefriendA/firEtcd/pkg/firlog"
 	"net"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -17,6 +18,8 @@ import (
 	"github.com/whosefriendA/firEtcd/raft"
 
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"  // 为 gRPC 状态添加
+	"google.golang.org/grpc/status" // 为 gRPC 状态添加
 )
 
 type KVServer struct {
@@ -45,7 +48,140 @@ type KVServer struct {
 
 	grpc *grpc.Server
 
-	lastIndexCh chan int
+	lastIndexCh    chan int
+	watcherManager *WatcherManager
+}
+
+// WatchEventType 映射 protobuf 枚举
+type WatchEventType pb.EventType
+
+const (
+	WatchEventTypePut    = WatchEventType(pb.EventType_PUT_EVENT)
+	WatchEventTypeDelete = WatchEventType(pb.EventType_DELETE_EVENT)
+)
+
+// WatchEvent 是变更事件的内部表示
+type WatchEvent struct {
+	Type  WatchEventType
+	Key   string
+	Value []byte // 用于 PUT_EVENT
+	// OldValue []byte // 可选
+}
+
+// Watcher 代表一个正在观察事件的客户端
+type watcher struct {
+	id        int64
+	key       string
+	isPrefix  bool
+	eventChan chan<- WatchEvent // 指向客户端 gRPC 流的只写通道
+	// sendInitialState bool // 可选
+}
+
+// WatcherManager 管理所有活跃的 watcher
+type WatcherManager struct {
+	mu             sync.RWMutex
+	nextWatcherID  int64
+	exactWatchers  map[string]map[int64]*watcher // key -> watcherID -> watcher
+	prefixWatchers map[string]map[int64]*watcher // prefix -> watcherID -> watcher
+}
+
+func NewWatcherManager() *WatcherManager {
+	return &WatcherManager{
+		nextWatcherID:  1,
+		exactWatchers:  make(map[string]map[int64]*watcher),
+		prefixWatchers: make(map[string]map[int64]*watcher),
+	}
+}
+
+// Register 注册一个新的 watcher
+func (wm *WatcherManager) Register(key string, isPrefix bool, eventChan chan<- WatchEvent) (watchID int64) {
+	wm.mu.Lock()
+	defer wm.mu.Unlock()
+
+	watchID = wm.nextWatcherID
+	wm.nextWatcherID++
+
+	w := &watcher{
+		id:        watchID,
+		key:       key,
+		isPrefix:  isPrefix,
+		eventChan: eventChan,
+	}
+
+	if isPrefix {
+		if _, ok := wm.prefixWatchers[key]; !ok {
+			wm.prefixWatchers[key] = make(map[int64]*watcher)
+		}
+		wm.prefixWatchers[key][w.id] = w // 修正：应使用 w.id 作为 key
+		firlog.Logger.Infof("WatcherManager: 为前缀 '%s' 注册了前缀观察者 ID %d", key, watchID)
+	} else {
+		if _, ok := wm.exactWatchers[key]; !ok {
+			wm.exactWatchers[key] = make(map[int64]*watcher)
+		}
+		wm.exactWatchers[key][w.id] = w // 修正：应使用 w.id 作为 key
+		firlog.Logger.Infof("WatcherManager: 为键 '%s' 注册了精确观察者 ID %d", key, watchID)
+	}
+	return watchID
+}
+
+// Deregister 注销一个 watcher
+func (wm *WatcherManager) Deregister(watchID int64, key string, isPrefix bool) {
+	wm.mu.Lock()
+	defer wm.mu.Unlock()
+
+	if isPrefix {
+		if watchersForKey, ok := wm.prefixWatchers[key]; ok {
+			if _, watcherExists := watchersForKey[watchID]; watcherExists { // 修正：应检查 watchID
+				delete(watchersForKey, watchID)
+				if len(watchersForKey) == 0 {
+					delete(wm.prefixWatchers, key)
+				}
+				firlog.Logger.Infof("WatcherManager: 为前缀 '%s' 注销了前缀观察者 ID %d", key, watchID)
+			}
+		}
+	} else {
+		if watchersForKey, ok := wm.exactWatchers[key]; ok {
+			if _, watcherExists := watchersForKey[watchID]; watcherExists { // 修正：应检查 watchID
+				delete(watchersForKey, watchID)
+				if len(watchersForKey) == 0 {
+					delete(wm.exactWatchers, key)
+				}
+				firlog.Logger.Infof("WatcherManager: 为键 '%s' 注销了精确观察者 ID %d", key, watchID)
+			}
+		}
+	}
+}
+
+// Notify 通知相关 watcher 一个事件。此方法不应阻塞。
+func (wm *WatcherManager) Notify(event WatchEvent) {
+	wm.mu.RLock()
+	defer wm.mu.RUnlock()
+
+	// 通知精确匹配的 watcher
+	if watchers, ok := wm.exactWatchers[event.Key]; ok {
+		for _, w := range watchers {
+			select {
+			case w.eventChan <- event:
+			default:
+				// 客户端通道已满或已关闭，记录此情况。
+				// 如果某个 watcher 持续缓慢，可以考虑关闭它。
+				firlog.Logger.Warnf("WatcherManager: 键 '%s' 的精确观察者 ID %d 事件通道已满或关闭。事件已丢弃。", event.Key, w.id)
+			}
+		}
+	}
+
+	// 通知前缀匹配的 watcher
+	for prefix, watchers := range wm.prefixWatchers {
+		if strings.HasPrefix(event.Key, prefix) {
+			for _, w := range watchers {
+				select {
+				case w.eventChan <- event:
+				default:
+					firlog.Logger.Warnf("WatcherManager: 前缀 '%s' 的前缀观察者 ID %d (事件键 '%s') 事件通道已满或关闭。事件已丢弃。", prefix, w.id, event.Key)
+				}
+			}
+		}
+	}
 }
 
 type duplicateType struct {
@@ -296,6 +432,97 @@ func (kv *KVServer) PutAppend(_ context.Context, args *pb.PutAppendArgs) (reply 
 	return reply, nil
 }
 
+func (kv *KVServer) Watch(req *pb.WatchRequest, stream pb.Kvserver_WatchServer) error {
+	if kv.killed() {
+		return status.Errorf(codes.Unavailable, "服务器正在关闭")
+	}
+
+	// 判断自己是不是 leader
+	if _, ok := kv.rf.GetState(); !ok {
+		leaderId := int32(kv.rf.GetleaderId())
+		// 你可能想返回一个更具体的错误或头部信息来指明 leader
+		return status.Errorf(codes.FailedPrecondition, "不是 leader，当前 leader 是 %d", leaderId)
+	}
+	// 判断自己有没有从重启中恢复完毕状态机
+	if !kv.rf.IisBack {
+		return status.Errorf(codes.Unavailable, "服务器正在恢复中")
+	}
+
+	clientEventChan := make(chan WatchEvent, 10) // 为此客户端设置的带缓冲的通道
+	watchKey := string(req.Key)
+	isPrefix := req.IsPrefix
+
+	watchID := kv.watcherManager.Register(watchKey, isPrefix, clientEventChan)
+	firlog.Logger.Infof("KVServer %d: Watch RPC 为键/前缀 '%s' 注册了观察者 ID %d, isPrefix: %t", kv.me, watchID, watchKey, isPrefix)
+
+	defer func() {
+		kv.watcherManager.Deregister(watchID, watchKey, isPrefix)
+		close(clientEventChan) // 很重要，如果下面的循环没有退出，需要关闭通道以停止它
+		firlog.Logger.Infof("KVServer %d: Watch RPC 为键/前缀 '%s' 注销了观察者 ID %d", kv.me, watchID, watchKey)
+	}()
+
+	// 可选：如果 req.SendInitialState 为 true，发送初始状态
+	// 这将涉及从 kv.db 读取数据并发送初始的 PUT_EVENT。
+	// 要小心锁 (kv.mu) 和与正在进行的更新可能发生的竞争条件。
+	// 为简单起见，这里省略了这一点，但在之前的一般性报告中讨论过。
+	if req.GetSendInitialState() {
+		kv.mu.Lock()
+		if isPrefix {
+			// ✅ Now you can call your new, correct method
+			pairs, _ := kv.db.GetPairsWithPrefix(watchKey)
+
+			for _, pair := range pairs {
+				initialEvent := WatchEvent{
+					Type:  WatchEventTypePut,
+					Key:   pair.Key,         // The full, specific key
+					Value: pair.Entry.Value, // The corresponding value
+				}
+
+				protoResp := &pb.WatchResponse{
+					Type:  pb.EventType_PUT_EVENT,
+					Key:   []byte(initialEvent.Key),
+					Value: initialEvent.Value,
+				}
+
+				if err := stream.Send(protoResp); err != nil {
+					kv.mu.Unlock()
+					return err // Exit on send error
+				}
+			}
+		} else {
+			// ... (your existing logic for a single key) ...
+		}
+		kv.mu.Unlock()
+	}
+
+	// 循环向客户端发送事件或检测客户端断开连接
+	for {
+		select {
+		case event, ok := <-clientEventChan:
+			if !ok {
+				// 通道被 Deregister 关闭，流应该结束
+				firlog.Logger.Infof("KVServer %d: 观察者 ID %d 事件通道已关闭，结束流。", kv.me, watchID)
+				return nil
+			}
+			protoResp := &pb.WatchResponse{
+				Type:  pb.EventType(event.Type),
+				Key:   []byte(event.Key),
+				Value: event.Value,
+			}
+			if err := stream.Send(protoResp); err != nil {
+				firlog.Logger.Warnf("KVServer %d: 向观察者 ID %d 发送事件时出错: %v。关闭流。", kv.me, watchID, err)
+				return err // 客户端断开连接或其他流错误
+			}
+			firlog.Logger.Debugf("KVServer %d: 已向观察者 ID %d 发送事件: %v", kv.me, watchID, event)
+
+		case <-stream.Context().Done():
+			// 客户端关闭了连接或上下文超时
+			firlog.Logger.Infof("KVServer %d: 观察者 ID %d 流上下文完成: %v。关闭流。", kv.me, watchID, stream.Context().Err())
+			return stream.Context().Err()
+		}
+	}
+}
+
 // state machine
 // 将value重新转换为 Op，添加到本地db中
 func (kv *KVServer) HandleApplych() {
@@ -345,6 +572,9 @@ func (kv *KVServer) HandleApplychCommand(raft_type raft.ApplyMsg) {
 	kv.duplicateMap[OP.ClientId] = duplicateType{
 		Offset: OP.Offset,
 	}
+
+	var eventsToNotify []WatchEvent // 收集事件，在数据库操作后进行通知
+
 	switch OP.OpType {
 	case int32(pb.OpType_PutT):
 		//更新状态机
@@ -354,6 +584,9 @@ func (kv *KVServer) HandleApplychCommand(raft_type raft.ApplyMsg) {
 		if err != nil {
 			firlog.Logger.Fatalf("database putEntry faild:%s", err)
 		}
+
+		eventsToNotify = append(eventsToNotify, WatchEvent{Type: WatchEventTypePut, Key: OP.Key, Value: OP.Entry.Value})
+		firlog.Logger.Debugf("KVServer %d: 已应用 Put, Key: %s。已排队等待 watch 通知。", kv.me, OP.Key)
 
 		// firlog.Logger.Infof("server [%d] [Update] [Put]->[%s,%s] [map] -> %v", kv.me, op_type.Key, op_type.Value, kv.db)
 		// firlog.Logger.Infof("server [%d] [Update] [Put]->[%s : %s] ", kv.me, op_type.Key, op_type.Value)
@@ -375,21 +608,39 @@ func (kv *KVServer) HandleApplychCommand(raft_type raft.ApplyMsg) {
 		if err != nil {
 			firlog.Logger.Fatalf("database putEntry faild:%s", err)
 		}
+
+		eventsToNotify = append(eventsToNotify, WatchEvent{Type: WatchEventTypePut, Key: OP.Key, Value: result})
+		firlog.Logger.Debugf("KVServer %d: 已应用 Put, Key: %s。已排队等待 watch 通知。", kv.me, OP.Key)
+
 		// firlog.Logger.Infof("server [%d] [Update] [Append]->[%s : %s]", kv.me, op_type.Key, op_type.Value)
 
 	case int32(pb.OpType_DelT):
+		_, err := kv.db.GetEntry(OP.Key) // 检查键是否存在
 		kv.db.Del(OP.Key)
+		if err == nil { // 仅当键实际存在时才通知
+			eventsToNotify = append(eventsToNotify, WatchEvent{Type: WatchEventTypeDelete, Key: OP.Key})
+			firlog.Logger.Debugf("KVServer %d: 已应用 Del, Key: %s。已排队等待 watch 通知。", kv.me, OP.Key)
+		}
 
 	case int32(pb.OpType_DelWithPrefix):
 		kv.db.DelWithPrefix(OP.Key)
+
+		eventsToNotify = append(eventsToNotify, WatchEvent{Type: WatchEventTypeDelete, Key: OP.Key /* 此事件的键是前缀 */})
+		firlog.Logger.Debugf("KVServer %d: 已应用 DelWithPrefix, Prefix: %s。已排队等待 watch 通知 (作为单个前缀删除)。", kv.me, OP.Key)
 
 	case int32(pb.OpType_CAST):
 		ori, _ := kv.db.GetEntry(OP.Key)
 		if bytes.Equal(ori.Value, OP.OriValue) {
 			if len(OP.Entry.Value) == 0 {
 				kv.db.Del(OP.Key)
+				eventsToNotify = append(eventsToNotify, WatchEvent{Type: WatchEventTypeDelete, Key: OP.Key})
+				firlog.Logger.Debugf("KVServer %d: 已应用 DelWithPrefix, Prefix: %s。已排队等待 watch 通知 (作为单个前缀删除)。", kv.me, OP.Key)
+
 			} else {
 				kv.db.PutEntry(OP.Key, OP.Entry)
+				eventsToNotify = append(eventsToNotify, WatchEvent{Type: WatchEventTypePut, Key: OP.Key, Value: OP.Entry.Value})
+				firlog.Logger.Debugf("KVServer %d: 已应用 DelWithPrefix, Prefix: %s。已排队等待 watch 通知 (作为单个前缀删除)。", kv.me, OP.Key)
+
 			}
 			kv.duplicateMap[OP.ClientId] = duplicateType{
 				Offset:    OP.Offset,
@@ -413,6 +664,7 @@ func (kv *KVServer) HandleApplychCommand(raft_type raft.ApplyMsg) {
 			switch op.OpType {
 			case int32(pb.OpType_PutT):
 				kv.db.PutEntry(op.Key, op.Entry)
+				eventsToNotify = append(eventsToNotify, WatchEvent{Type: WatchEventTypePut, Key: op.Key, Value: op.Entry.Value})
 			case int32(pb.OpType_AppendT):
 				ori, _ := kv.db.GetEntry(op.Key)
 
@@ -428,10 +680,13 @@ func (kv *KVServer) HandleApplychCommand(raft_type raft.ApplyMsg) {
 					Value:    result,
 					DeadTime: op.Entry.DeadTime,
 				})
+				eventsToNotify = append(eventsToNotify, WatchEvent{Type: WatchEventTypePut, Key: op.Key, Value: result})
 			case int32(pb.OpType_DelT):
 				kv.db.Del(op.Key)
+				eventsToNotify = append(eventsToNotify, WatchEvent{Type: WatchEventTypeDelete, Key: op.Key})
 			case int32(pb.OpType_DelWithPrefix):
 				kv.db.DelWithPrefix(op.Key)
+				eventsToNotify = append(eventsToNotify, WatchEvent{Type: WatchEventTypeDelete, Key: op.Key})
 			}
 			// firlog.Logger.Infof("exec batch op: %+v", op)
 		}
@@ -440,6 +695,13 @@ func (kv *KVServer) HandleApplychCommand(raft_type raft.ApplyMsg) {
 		firlog.Logger.Fatalf("日志中出现未知optype = [%d]", OP.OpType)
 	}
 
+	if len(eventsToNotify) > 0 {
+		// 当前持有 kv.mu。如果 WatcherManager.Notify 需要获取 kv.mu，
+		// 将会发生死锁。WatcherManager 有自己的 RWMutex，所以这样是安全的。
+		for _, event := range eventsToNotify {
+			kv.watcherManager.Notify(event)
+		}
+	}
 }
 
 // 被动快照,follower接受从leader传来的snapshot
@@ -562,6 +824,7 @@ func StartKVServer(conf firconfig.Kvserver, me int, persister *raft.Persister, m
 		db:               buntdbx.NewDB(),
 		lastIndexCh:      make(chan int),
 		duplicateMap:     make(map[int64]duplicateType),
+		watcherManager:   NewWatcherManager(), // 初始化 WatcherManager
 	}
 
 	kv.rf = raft.Make(me, persister, kv.applyCh, conf.Rafts)
