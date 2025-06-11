@@ -100,7 +100,25 @@ message GetReply {
   int32 ServerId = 4;
 }
 
+enum EventType {
+  PUT_EVENT = 0;
+  DELETE_EVENT = 1;
+}
+
+message WatchRequest {
+  bytes key = 1;
+  bool is_prefix = 2;
+  bool send_initial_state = 3;
+}
+
+message WatchResponse {
+  EventType type = 1;
+  bytes key = 2;
+  bytes value = 3;
+}
+
 service kvserver {
   rpc Get(GetArgs) returns (GetReply);
   rpc PutAppend(PutAppendArgs) returns (PutAppendReply);
+  rpc Watch(WatchRequest) returns (stream WatchResponse);
 }

@@ -197,6 +197,7 @@ var Raft_ServiceDesc = grpc.ServiceDesc{
 const (
 	Kvserver_Get_FullMethodName       = "/fir.pb.kvserver/Get"
 	Kvserver_PutAppend_FullMethodName = "/fir.pb.kvserver/PutAppend"
+	Kvserver_Watch_FullMethodName     = "/fir.pb.kvserver/Watch"
 )
 
 // KvserverClient is the client API for Kvserver service.
@@ -205,6 +206,7 @@ const (
 type KvserverClient interface {
 	Get(ctx context.Context, in *GetArgs, opts ...grpc.CallOption) (*GetReply, error)
 	PutAppend(ctx context.Context, in *PutAppendArgs, opts ...grpc.CallOption) (*PutAppendReply, error)
+	Watch(ctx context.Context, in *WatchRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[WatchResponse], error)
 }
 
 type kvserverClient struct {
@@ -235,12 +237,32 @@ func (c *kvserverClient) PutAppend(ctx context.Context, in *PutAppendArgs, opts 
 	return out, nil
 }
 
+func (c *kvserverClient) Watch(ctx context.Context, in *WatchRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[WatchResponse], error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	stream, err := c.cc.NewStream(ctx, &Kvserver_ServiceDesc.Streams[0], Kvserver_Watch_FullMethodName, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &grpc.GenericClientStream[WatchRequest, WatchResponse]{ClientStream: stream}
+	if err := x.ClientStream.SendMsg(in); err != nil {
+		return nil, err
+	}
+	if err := x.ClientStream.CloseSend(); err != nil {
+		return nil, err
+	}
+	return x, nil
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type Kvserver_WatchClient = grpc.ServerStreamingClient[WatchResponse]
+
 // KvserverServer is the server API for Kvserver service.
 // All implementations should embed UnimplementedKvserverServer
 // for forward compatibility.
 type KvserverServer interface {
 	Get(context.Context, *GetArgs) (*GetReply, error)
 	PutAppend(context.Context, *PutAppendArgs) (*PutAppendReply, error)
+	Watch(*WatchRequest, grpc.ServerStreamingServer[WatchResponse]) error
 }
 
 // UnimplementedKvserverServer should be embedded to have
@@ -255,6 +277,9 @@ func (UnimplementedKvserverServer) Get(context.Context, *GetArgs) (*GetReply, er
 }
 func (UnimplementedKvserverServer) PutAppend(context.Context, *PutAppendArgs) (*PutAppendReply, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method PutAppend not implemented")
+}
+func (UnimplementedKvserverServer) Watch(*WatchRequest, grpc.ServerStreamingServer[WatchResponse]) error {
+	return status.Errorf(codes.Unimplemented, "method Watch not implemented")
 }
 func (UnimplementedKvserverServer) testEmbeddedByValue() {}
 
@@ -312,6 +337,17 @@ func _Kvserver_PutAppend_Handler(srv interface{}, ctx context.Context, dec func(
 	return interceptor(ctx, in, info, handler)
 }
 
+func _Kvserver_Watch_Handler(srv interface{}, stream grpc.ServerStream) error {
+	m := new(WatchRequest)
+	if err := stream.RecvMsg(m); err != nil {
+		return err
+	}
+	return srv.(KvserverServer).Watch(m, &grpc.GenericServerStream[WatchRequest, WatchResponse]{ServerStream: stream})
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type Kvserver_WatchServer = grpc.ServerStreamingServer[WatchResponse]
+
 // Kvserver_ServiceDesc is the grpc.ServiceDesc for Kvserver service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -328,6 +364,12 @@ var Kvserver_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _Kvserver_PutAppend_Handler,
 		},
 	},
-	Streams:  []grpc.StreamDesc{},
+	Streams: []grpc.StreamDesc{
+		{
+			StreamName:    "Watch",
+			Handler:       _Kvserver_Watch_Handler,
+			ServerStreams: true,
+		},
+	},
 	Metadata: "proto/pb/pb.proto",
 }
