@@ -4,7 +4,7 @@ type Gateway struct {
 	Clerk   Clerk
 	Addr    string
 	Port    string
-	BaseUrl string
+	BaseUrl string `yaml:"baseUrl"`
 }
 
 func (g *Gateway) Default() {
