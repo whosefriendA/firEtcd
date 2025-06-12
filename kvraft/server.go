@@ -475,38 +475,47 @@ func (kv *KVServer) Watch(req *pb.WatchRequest, stream pb.Kvserver_WatchServer) 
 	}()
 
 	// 可选：如果 req.SendInitialState 为 true，发送初始状态
-	// 这将涉及从 kv.db 读取数据并发送初始的 PUT_EVENT。
-	// 要小心锁 (kv.mu) 和与正在进行的更新可能发生的竞争条件。
-	// 为简单起见，这里省略了这一点，但在之前的一般性报告中讨论过。
-	firlog.Logger.Infof("KVServer %d: Watch ID %d, sendInitialState=true. PREPARING to send initial state for key '%s'.", kv.me, watchID, watchKey)
 	if req.GetSendInitialState() {
+		firlog.Logger.Infof("KVServer %d: Watch ID %d, sendInitialState=true. PREPARING to send initial state for key '%s'.", kv.me, watchID, watchKey)
 		kv.mu.Lock()
 		if isPrefix {
-			// ✅ Now you can call your new, correct method
 			pairs, _ := kv.db.GetPairsWithPrefix(watchKey)
-
 			for _, pair := range pairs {
-				initialEvent := WatchEvent{
-					Type:  WatchEventTypePut,
-					Key:   pair.Key,         // The full, specific key
-					Value: pair.Entry.Value, // The corresponding value
-				}
-
 				protoResp := &pb.WatchResponse{
 					Type:  pb.EventType_PUT_EVENT,
-					Key:   []byte(initialEvent.Key),
-					Value: initialEvent.Value,
+					Key:   []byte(pair.Key),
+					Value: pair.Entry.Value,
 				}
-				firlog.Logger.Infof("KVServer %d: Watch ID %d, FOUND initial value. PREPARING TO SEND over gRPC stream.", kv.me, watchID)
 				if err := stream.Send(protoResp); err != nil {
-					firlog.Logger.Errorf("KVServer %d: Watch ID %d, FAILED to send initial value over gRPC stream. Error: %v", kv.me, watchID, err)
+					firlog.Logger.Errorf("KVServer %d: Watch ID %d, FAILED to send initial prefix value over gRPC stream. Error: %v", kv.me, watchID, err)
 					kv.mu.Unlock()
 					return err // Exit on send error
 				}
-				firlog.Logger.Infof("KVServer %d: Watch ID %d, SUCCESSFULLY SENT initial value over gRPC stream.", kv.me, watchID)
 			}
+			firlog.Logger.Infof("KVServer %d: Watch ID %d, SUCCESSFULLY SENT all initial prefix values.", kv.me, watchID)
 		} else {
-			firlog.Logger.Infof("KVServer %d: Watch ID %d, Initial value for key '%s' not found in db.", kv.me, watchID, watchKey)
+			// ======================= FIX START =======================
+			// 这是修正的核心：为精确匹配添加数据库查询逻辑
+			entry, err := kv.db.GetEntry(watchKey)
+			if err == nil {
+				// 如果找到了 key
+				protoResp := &pb.WatchResponse{
+					Type:  pb.EventType_PUT_EVENT,
+					Key:   []byte(watchKey),
+					Value: entry.Value,
+				}
+				firlog.Logger.Infof("KVServer %d: Watch ID %d, FOUND initial value. PREPARING TO SEND over gRPC stream.", kv.me, watchID)
+				if sendErr := stream.Send(protoResp); sendErr != nil {
+					firlog.Logger.Errorf("KVServer %d: Watch ID %d, FAILED to send initial value over gRPC stream. Error: %v", kv.me, watchID, sendErr)
+					kv.mu.Unlock()
+					return sendErr // Exit on send error
+				}
+				firlog.Logger.Infof("KVServer %d: Watch ID %d, SUCCESSFULLY SENT initial value over gRPC stream.", kv.me, watchID)
+			} else {
+				// 只有在 kv.db.GetEntry 确实返回错误时，才打印这个日志
+				firlog.Logger.Infof("KVServer %d: Watch ID %d, Initial value for key '%s' not found in db. Error: %v", kv.me, watchID, watchKey, err)
+			}
+			// ======================= FIX END =========================
 		}
 		kv.mu.Unlock()
 	}
