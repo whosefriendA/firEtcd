@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/whosefriendA/firEtcd/pkg/firlog"
+	"log"
 	"net/http"
 	"strconv"
 	"time"
@@ -44,10 +46,14 @@ func NewGateway(conf firconfig.Gateway) *Gateway {
 // default baseUrl = '/firEtcd'
 func (g *Gateway) Run() error {
 	r := gin.Default()
+
+	r.Use(InstantLogger())
+
 	r.GET(g.conf.BaseUrl+"/keys", g.keys)
 	r.GET(g.conf.BaseUrl+"/key", g.get)
 	r.GET(g.conf.BaseUrl+"/keysWithPrefix", g.getWithPrefix)
 	r.GET(g.conf.BaseUrl+"/kvs", g.kvs)
+	r.GET(g.conf.BaseUrl+"/watch", g.watch)
 	r.POST(g.conf.BaseUrl+"/put", g.put)
 	r.POST(g.conf.BaseUrl+"/putCAS", g.putCAS)
 	r.DELETE(g.conf.BaseUrl+"/key", g.del)
@@ -60,10 +66,24 @@ func (g *Gateway) LoadRouter(r *gin.Engine) {
 	r.GET(g.conf.BaseUrl+"/key", g.get)
 	r.GET(g.conf.BaseUrl+"/keysWithPrefix", g.getWithPrefix)
 	r.GET(g.conf.BaseUrl+"/kvs", g.kvs)
+	r.GET(g.conf.BaseUrl+"/watch", g.watch)
 	r.POST(g.conf.BaseUrl+"/put", g.put)
 	r.POST(g.conf.BaseUrl+"/putCAS", g.putCAS)
 	r.DELETE(g.conf.BaseUrl+"/key", g.del)
 	r.DELETE(g.conf.BaseUrl+"/keysWithPrefix", g.delWithPrefix)
+}
+
+func InstantLogger() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		// 请求一进来就立即打印日志
+		log.Printf("[InstantLogger] ==> %s %s", c.Request.Method, c.Request.RequestURI)
+
+		// 调用 c.Next() 将控制权交给下一个中间件或处理器
+		c.Next()
+
+		// c.Next() 返回后（对于SSE永远不会），可以再记录一些信息
+		// log.Printf("[InstantLogger] <== %s %s completed with status %d", c.Request.Method, c.Request.RequestURI, c.Writer.Status())
+	}
 }
 
 // watch 是处理 /watch SSE 请求的 Gin处理器
@@ -149,12 +169,14 @@ func (g *Gateway) watch(c *gin.Context) {
 			if !ok { // 后端事件通道已关闭
 				//slog.Info("Backend event channel closed, watch stream ending", logAttrs...)
 				// 可以选择向客户端发送一个流结束的信号
+				firlog.Logger.Warnf("Gateway Watch: Backend event channel was closed.")
 				c.SSEvent("stream_end", gin.H{"message": "Watch stream ended from backend"})
 				//if errSSE!= nil {
 				//// slog.Warn("Failed to send stream_end SSE event", append(logAttrs, slog.Any("error", errSSE))...)
 				//}
 				return
 			}
+			firlog.Logger.Infof("Gateway Watch: SUCCESSFULLY received an event from Clerk's channel. Preparing to send to client via SSE.")
 
 			// 将 WatchEvent 格式化为 JSON
 			// 注意：WatchEvent 结构体中的byte 字段在 json.Marshal 时会自动 base64 编码
