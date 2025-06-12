@@ -184,6 +184,8 @@ func (ck *Clerk) manageWatchStream(ctx context.Context, watchKeyStr string, req 
 					ck.mu.Unlock()
 				}
 				goto handle_error_and_retry // Break recv_loop and go to retry logic
+			} else {
+				firlog.Logger.Infof("Clerk Watch: SUCCESSFULLY received response from gRPC. Key: %s", string(resp.Key))
 			}
 
 			event := (*WatchEvent)(resp)
@@ -276,6 +278,7 @@ func MakeClerk(conf firconfig.Clerk) *Clerk {
 		ck.sToc[i] = -1
 	}
 	go ck.watchEtcd()
+	firlog.Logger.Infof("client:::asdfahsdljfkhaskldhflkasd")
 	return ck
 }
 
