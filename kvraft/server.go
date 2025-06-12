@@ -48,8 +48,11 @@ type KVServer struct {
 
 	grpc *grpc.Server
 
-	lastIndexCh    chan int
+	lastIndexCh chan int
+
 	watcherManager *WatcherManager
+
+	eventNotifier chan WatchEvent
 }
 
 // WatchEventType 映射 protobuf 枚举
@@ -184,6 +187,15 @@ func (wm *WatcherManager) Notify(event WatchEvent) {
 	}
 }
 
+// 新增: 这是专门处理通知的 goroutine
+func (kv *KVServer) notifierLoop() {
+	// 它会不断地从通知通道中读取事件
+	for event := range kv.eventNotifier {
+		// 这个调用在独立的 goroutine 中，不会持有 kv.mu，因此是安全的
+		kv.watcherManager.Notify(event)
+	}
+}
+
 type duplicateType struct {
 	Offset int32
 	// Reply     string
@@ -266,6 +278,7 @@ func (kv *KVServer) Get(_ context.Context, args *pb.GetArgs) (reply *pb.GetReply
 				// buf.Reset()
 			}
 		case pb.OpType_GetKVs:
+			firlog.Logger.Infof("KVServer %d: Handling a GET_ALL request.", kv.me)
 			ret, err := kv.db.KVs(int(args.PageSize), int(args.PageIndex))
 			if err != nil {
 				firlog.Logger.Fatalln(err)
@@ -465,6 +478,7 @@ func (kv *KVServer) Watch(req *pb.WatchRequest, stream pb.Kvserver_WatchServer) 
 	// 这将涉及从 kv.db 读取数据并发送初始的 PUT_EVENT。
 	// 要小心锁 (kv.mu) 和与正在进行的更新可能发生的竞争条件。
 	// 为简单起见，这里省略了这一点，但在之前的一般性报告中讨论过。
+	firlog.Logger.Infof("KVServer %d: Watch ID %d, sendInitialState=true. PREPARING to send initial state for key '%s'.", kv.me, watchID, watchKey)
 	if req.GetSendInitialState() {
 		kv.mu.Lock()
 		if isPrefix {
@@ -483,14 +497,16 @@ func (kv *KVServer) Watch(req *pb.WatchRequest, stream pb.Kvserver_WatchServer) 
 					Key:   []byte(initialEvent.Key),
 					Value: initialEvent.Value,
 				}
-
+				firlog.Logger.Infof("KVServer %d: Watch ID %d, FOUND initial value. PREPARING TO SEND over gRPC stream.", kv.me, watchID)
 				if err := stream.Send(protoResp); err != nil {
+					firlog.Logger.Errorf("KVServer %d: Watch ID %d, FAILED to send initial value over gRPC stream. Error: %v", kv.me, watchID, err)
 					kv.mu.Unlock()
 					return err // Exit on send error
 				}
+				firlog.Logger.Infof("KVServer %d: Watch ID %d, SUCCESSFULLY SENT initial value over gRPC stream.", kv.me, watchID)
 			}
 		} else {
-			// ... (your existing logic for a single key) ...
+			firlog.Logger.Infof("KVServer %d: Watch ID %d, Initial value for key '%s' not found in db.", kv.me, watchID, watchKey)
 		}
 		kv.mu.Unlock()
 	}
@@ -529,15 +545,27 @@ func (kv *KVServer) HandleApplych() {
 	for !kv.killed() {
 		select {
 		case raft_type := <-kv.applyCh:
-			//firlog.Logger.Debugln("pass", kv.me)
 			if kv.killed() {
 				return
 			}
+
+			// NEW: Declare a slice to hold events outside the lock
+			var eventsToNotify []WatchEvent
+
+			// --- Critical Section Starts ---
 			kv.mu.Lock()
+
 			if raft_type.CommandValid {
-				kv.HandleApplychCommand(raft_type)
+				// MODIFIED: Call the refactored HandleApplychCommand and receive the events
+				// The rest of the logic inside the lock remains the same
+				if raft_type.CommandIndex > kv.lastAppliedIndex { // Prevent re-applying old commands
+					eventsToNotify = kv.HandleApplychCommand(raft_type)
+					kv.lastAppliedIndex = raft_type.CommandIndex
+				}
+
 				kv.checkifNeedSnapshot(raft_type.CommandIndex)
-				kv.lastAppliedIndex = raft_type.CommandIndex
+
+				// This non-blocking send to unblock client RPCs is fine to keep inside the lock
 				for {
 					select {
 					case kv.lastIndexCh <- raft_type.CommandIndex:
@@ -546,28 +574,43 @@ func (kv *KVServer) HandleApplych() {
 					}
 				}
 			APPLYBREAK:
-				// firlog.Logger.Debugln("pass", kv.me, "  raft_type.CommandIndex=", raft_type.CommandIndex)
 			} else if raft_type.SnapshotValid {
 				firlog.Logger.Infof("📷 server [%d] receive raftSnapshotIndex[%d]", kv.me, raft_type.SnapshotIndex)
-				kv.HandleApplychSnapshot(raft_type)
+				kv.HandleApplychSnapshot(raft_type) // Assumes this function correctly handles locking
 			} else {
 				firlog.Logger.Fatalf("Unrecordnized applyArgs type")
 			}
-			kv.mu.Unlock()
-		}
 
+			kv.mu.Unlock()
+			// --- Critical Section Ends ---
+
+			// **MOVED OUTSIDE LOCK**: The notification logic is now here.
+			// This part runs without holding the server's main lock, so it can't freeze the state machine.
+			if len(eventsToNotify) > 0 {
+				for _, event := range eventsToNotify {
+					// Non-blockingly send the event to the dedicated notifier goroutine
+					select {
+					case kv.eventNotifier <- event:
+						// Event successfully queued for notification
+					default:
+						// This case is a safeguard against a full notifier channel
+						firlog.Logger.Warnf("KVServer %d: Notifier channel full. Discarding watch event for key %s.", kv.me, event.Key)
+					}
+				}
+			}
+		}
 	}
 }
 
-func (kv *KVServer) HandleApplychCommand(raft_type raft.ApplyMsg) {
+func (kv *KVServer) HandleApplychCommand(raft_type raft.ApplyMsg) []WatchEvent {
 	OP := new(raft.Op)
 	OP.Unmarshal(raft_type.Command)
 	if OP.OpType == int32(pb.OpType_EmptyT) {
-		return
+		return nil
 	}
 	if OP.Offset <= kv.duplicateMap[OP.ClientId].Offset {
 		firlog.Logger.Infof("⛔server [%d] [%v] lastapplied[%v]find in the cache and discard %v", kv.me, OP, kv.lastAppliedIndex, kv.db)
-		return
+		return nil
 	}
 	kv.duplicateMap[OP.ClientId] = duplicateType{
 		Offset: OP.Offset,
@@ -695,13 +738,7 @@ func (kv *KVServer) HandleApplychCommand(raft_type raft.ApplyMsg) {
 		firlog.Logger.Fatalf("日志中出现未知optype = [%d]", OP.OpType)
 	}
 
-	if len(eventsToNotify) > 0 {
-		// 当前持有 kv.mu。如果 WatcherManager.Notify 需要获取 kv.mu，
-		// 将会发生死锁。WatcherManager 有自己的 RWMutex，所以这样是安全的。
-		for _, event := range eventsToNotify {
-			kv.watcherManager.Notify(event)
-		}
-	}
+	return eventsToNotify
 }
 
 // 被动快照,follower接受从leader传来的snapshot
@@ -825,7 +862,11 @@ func StartKVServer(conf firconfig.Kvserver, me int, persister *raft.Persister, m
 		lastIndexCh:      make(chan int),
 		duplicateMap:     make(map[int64]duplicateType),
 		watcherManager:   NewWatcherManager(), // 初始化 WatcherManager
+		// 新增: 创建一个足够大的缓冲通道
+		eventNotifier: make(chan WatchEvent, 1024),
 	}
+	// 新增: 启动专门的通知器 goroutine
+	go kv.notifierLoop()
 
 	kv.rf = raft.Make(me, persister, kv.applyCh, conf.Rafts)
 
