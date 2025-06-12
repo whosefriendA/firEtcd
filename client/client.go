@@ -73,7 +73,7 @@ func (ck *Clerk) Watch(ctx context.Context, key string, opts ...WatchOption) (<-
 	watchReq := &pb.WatchRequest{
 		Key:              []byte(key),
 		IsPrefix:         false, // Default, overridden by WithPrefix
-		SendInitialState: false, // Default, overridden by WithSendInitialState
+		SendInitialState: true,  // Default, overridden by WithSendInitialState
 	}
 	for _, opt := range opts {
 		opt(watchReq)
@@ -165,6 +165,7 @@ func (ck *Clerk) manageWatchStream(ctx context.Context, watchKeyStr string, req 
 			resp, recvErr := stream.Recv()
 			if recvErr != nil {
 				if recvErr == io.EOF {
+					firlog.Logger.Errorf("Clerk Watch: FAILED to receive from gRPC stream. Error: %v", recvErr)
 					//firlog.Logger.Infof("Watch stream for key '%s' closed by server %s (EOF).", watchKeyStr, currentKvClient.Addr)
 				} else {
 					//firlog.Logger.Warnf("Watch stream for key '%s' on server %s Recv error: %v.", watchKeyStr, currentKvClient.Addr, recvErr)
