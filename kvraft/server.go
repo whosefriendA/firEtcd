@@ -3,13 +3,16 @@ package kvraft
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/gob"
-	"github.com/whosefriendA/firEtcd/pkg/firlog"
-	"net"
+	"io/ioutil"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/whosefriendA/firEtcd/pkg/firlog"
 
 	"github.com/whosefriendA/firEtcd/common"
 	buntdbx "github.com/whosefriendA/firEtcd/pkg/buntdb"
@@ -18,7 +21,8 @@ import (
 	"github.com/whosefriendA/firEtcd/raft"
 
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/codes"  // 为 gRPC 状态添加
+	"google.golang.org/grpc/codes" // 为 gRPC 状态添加
+	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/status" // 为 gRPC 状态添加
 )
 
@@ -870,27 +874,49 @@ func StartKVServer(conf firconfig.Kvserver, me int, persister *raft.Persister, m
 		db:               buntdbx.NewDB(),
 		lastIndexCh:      make(chan int),
 		duplicateMap:     make(map[int64]duplicateType),
-		watcherManager:   NewWatcherManager(), // 初始化 WatcherManager
-		// 新增: 创建一个足够大的缓冲通道
-		eventNotifier: make(chan WatchEvent, 1024),
+		watcherManager:   NewWatcherManager(),
+		eventNotifier:    make(chan WatchEvent, 1024),
 	}
-	// 新增: 启动专门的通知器 goroutine
+
 	go kv.notifierLoop()
 
 	kv.rf = raft.Make(me, persister, kv.applyCh, conf.Rafts)
 
-	//state machine
-
 	kv.readPersist(persister.ReadSnapshot())
 	go kv.HandleApplych()
-	// go kv.HandleSnapshot()
-	// go kv.handleGetTask()
-	// server grpc
-	lis, err := net.Listen("tcp", conf.Addr+conf.Port)
+
+	// 加载TLS证书
+	certificate, err := tls.LoadX509KeyPair("certs/server.crt", "certs/server.key")
 	if err != nil {
-		firlog.Logger.Fatalln("error: etcd start faild", err)
+		firlog.Logger.Fatalf("无法加载服务器证书: %v", err)
 	}
-	gServer := grpc.NewServer()
+
+	// 创建证书池并添加CA证书
+	certPool := x509.NewCertPool()
+	ca, err := ioutil.ReadFile("certs/ca.crt")
+	if err != nil {
+		firlog.Logger.Fatalf("无法读取CA证书: %v", err)
+	}
+	if ok := certPool.AppendCertsFromPEM(ca); !ok {
+		firlog.Logger.Fatal("无法将CA证书添加到证书池")
+	}
+
+	// 配置TLS
+	tlsConfig := &tls.Config{
+		Certificates: []tls.Certificate{certificate},
+		ClientCAs:    certPool,
+		ClientAuth:   tls.RequireAndVerifyClientCert,
+		MinVersion:   tls.VersionTLS12,
+	}
+
+	// 创建TLS监听器
+	lis, err := tls.Listen("tcp", conf.Addr+conf.Port, tlsConfig)
+	if err != nil {
+		firlog.Logger.Fatalln("error: etcd start failed", err)
+	}
+
+	// 创建gRPC服务器，启用TLS
+	gServer := grpc.NewServer(grpc.Creds(credentials.NewTLS(tlsConfig)))
 	pb.RegisterKvserverServer(gServer, kv)
 	go func() {
 		if err := gServer.Serve(lis); err != nil {
@@ -898,7 +924,7 @@ func StartKVServer(conf firconfig.Kvserver, me int, persister *raft.Persister, m
 		}
 	}()
 
-	firlog.Logger.Infoln("etcd serivce is running on addr:", conf.Addr+conf.Port)
+	firlog.Logger.Infoln("etcd service is running on addr:", conf.Addr+conf.Port)
 	kv.grpc = gServer
 
 	firlog.Logger.Infof("server [%d] restart", kv.me)
