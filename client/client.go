@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/gob"
+	"errors"
 	"io"
 	"math/big"
 	"sync"
@@ -21,9 +22,32 @@ import (
 	"github.com/whosefriendA/firEtcd/proto/pb"
 )
 
+var (
+	ErrKeyNotFound = errors.New("key not found")
+)
+
+// Clerk 定义了客户端的行为
+type Clerk interface {
+	Get(key string) ([]byte, error)
+	Put(key string, value []byte, TTL time.Duration) error
+	Delete(key string) error
+	DeleteWithPrefix(prefix string) error
+	GetWithPrefix(key string) ([][]byte, error)
+	Keys() ([]common.Pair, error)
+	KeysWithPage(pageSize, pageIndex int) ([]common.Pair, error)
+	KVs() ([]common.Pair, error)
+	KVsWithPage(pageSize, pageIndex int) ([]common.Pair, error)
+	Lock(key string, TTL time.Duration) (string, error)
+	Unlock(key string, id string) (bool, error)
+	Pipeline() *Pipe
+	Watch(ctx context.Context, key string, opts ...WatchOption) (<-chan *WatchEvent, error)
+	WatchDog(key string, value []byte) func()
+	CAS(key string, origin, dest []byte, TTL time.Duration) (bool, error)
+}
+
 var pipeLimit int = 1024 * 4000
 
-type Clerk struct {
+type clerkImpl struct {
 	servers []*kvraft.KVClient
 	// You will have to modify this struct.
 	nextSendLocalId int
@@ -70,7 +94,7 @@ const (
 	watchEventBufferSize     = 100 // Buffer size for the event channel returned to the application
 )
 
-func (ck *Clerk) Watch(ctx context.Context, key string, opts ...WatchOption) (<-chan *WatchEvent, error) {
+func (ck *clerkImpl) Watch(ctx context.Context, key string, opts ...WatchOption) (<-chan *WatchEvent, error) {
 	watchReq := &pb.WatchRequest{
 		Key:              []byte(key),
 		IsPrefix:         false, // Default, overridden by WithPrefix
@@ -93,7 +117,7 @@ func (ck *Clerk) Watch(ctx context.Context, key string, opts ...WatchOption) (<-
 	return eventChan, nil
 }
 
-func (ck *Clerk) manageWatchStream(ctx context.Context, watchKeyStr string, req *pb.WatchRequest, eventChan chan<- *WatchEvent) {
+func (ck *clerkImpl) manageWatchStream(ctx context.Context, watchKeyStr string, req *pb.WatchRequest, eventChan chan<- *WatchEvent) {
 	defer close(eventChan)
 
 	currentBackoff := watchRetryInitialBackoff
@@ -242,7 +266,7 @@ func shouldRetry(code codes.Code) bool {
 		return false
 	}
 }
-func (c *Clerk) watchEtcd() {
+func (c *clerkImpl) watchEtcd() {
 	for {
 		for i, kvclient := range c.servers {
 			if !kvclient.Valid {
@@ -260,30 +284,19 @@ func (c *Clerk) watchEtcd() {
 	}
 }
 
-func MakeClerk(conf firconfig.Clerk) *Clerk {
-	ck := new(Clerk)
-	ck.conf = conf
-	// You'll have to add code here
-	ck.servers = make([]*kvraft.KVClient, len(conf.EtcdAddrs))
-	for i := range ck.servers {
-		ck.servers[i] = new(kvraft.KVClient)
-		ck.servers[i].Valid = false
+func MakeClerk(conf firconfig.Clerk) Clerk {
+	return &clerkImpl{
+		servers:         make([]*kvraft.KVClient, len(conf.EtcdAddrs)),
+		nextSendLocalId: 0,
+		LatestOffset:    0,
+		clientId:        nrand(),
+		cTos:            make([]int, len(conf.EtcdAddrs)),
+		sToc:            make([]int, len(conf.EtcdAddrs)),
+		conf:            conf,
 	}
-	ck.nextSendLocalId = int(nrand() % int64(len(conf.EtcdAddrs)))
-	ck.LatestOffset = 1
-	ck.clientId = nrand()
-	ck.cTos = make([]int, len(conf.EtcdAddrs))
-	ck.sToc = make([]int, len(conf.EtcdAddrs))
-	for i := range ck.cTos {
-		ck.cTos[i] = -1
-		ck.sToc[i] = -1
-	}
-	go ck.watchEtcd()
-	firlog.Logger.Infof("client:::asdfahsdljfkhaskldhflkasd")
-	return ck
 }
 
-func (ck *Clerk) doGetValue(key string, withPrefix bool) ([][]byte, error) {
+func (ck *clerkImpl) doGetValue(key string, withPrefix bool) ([][]byte, error) {
 	args := pb.GetArgs{
 		Key:          key,
 		ClientId:     ck.clientId,
@@ -294,7 +307,7 @@ func (ck *Clerk) doGetValue(key string, withPrefix bool) ([][]byte, error) {
 	return ck.read(&args)
 }
 
-func (ck *Clerk) doGetKV(key string, withPrefix bool, op pb.OpType, pageSize, pageIndex int) ([]common.Pair, error) {
+func (ck *clerkImpl) doGetKV(key string, withPrefix bool, op pb.OpType, pageSize, pageIndex int) ([]common.Pair, error) {
 	args := pb.GetArgs{
 		Key:          key,
 		ClientId:     ck.clientId,
@@ -327,7 +340,7 @@ func (ck *Clerk) doGetKV(key string, withPrefix bool, op pb.OpType, pageSize, pa
 // must match the declared types of the RPC handler function's
 // arguments. and reply must be passed as a pointer.
 
-func (ck *Clerk) read(args *pb.GetArgs) ([][]byte, error) {
+func (ck *clerkImpl) read(args *pb.GetArgs) ([][]byte, error) {
 	// You will have to modify this function.
 	ck.mu.Lock()
 	defer ck.mu.Unlock()
@@ -421,7 +434,7 @@ func (ck *Clerk) read(args *pb.GetArgs) ([][]byte, error) {
 // the types of args and reply (including whether they are pointers)
 // must match the declared types of the RPC handler function's
 // arguments. and reply must be passed as a pointer.
-func (ck *Clerk) write(key string, value, oriValue []byte, TTL time.Duration, op int32) error {
+func (ck *clerkImpl) write(key string, value, oriValue []byte, TTL time.Duration, op int32) error {
 	// You will have to modify this function.
 
 	ck.mu.Lock()
@@ -519,27 +532,27 @@ func (ck *Clerk) write(key string, value, oriValue []byte, TTL time.Duration, op
 	}
 }
 
-func (ck *Clerk) changeNextSendId() {
+func (ck *clerkImpl) changeNextSendId() {
 	ck.nextSendLocalId = (ck.nextSendLocalId + 1) % len(ck.servers)
 }
 
-func (ck *Clerk) Put(key string, value []byte, TTL time.Duration) error {
+func (ck *clerkImpl) Put(key string, value []byte, TTL time.Duration) error {
 	return ck.write(key, value, nil, TTL, int32(pb.OpType_PutT))
 }
 
-func (ck *Clerk) Append(key string, value []byte, TTL time.Duration) error {
+func (ck *clerkImpl) Append(key string, value []byte, TTL time.Duration) error {
 	return ck.write(key, value, nil, TTL, int32(pb.OpType_AppendT))
 }
 
-func (ck *Clerk) Delete(key string) error {
+func (ck *clerkImpl) Delete(key string) error {
 	return ck.write(key, nil, nil, 0, int32(pb.OpType_DelT))
 }
 
-func (ck *Clerk) DeleteWithPrefix(prefix string) error {
+func (ck *clerkImpl) DeleteWithPrefix(prefix string) error {
 	return ck.write(prefix, nil, nil, 0, int32(pb.OpType_DelWithPrefix))
 }
 
-func (ck *Clerk) CAS(key string, origin, dest []byte, TTL time.Duration) (bool, error) {
+func (ck *clerkImpl) CAS(key string, origin, dest []byte, TTL time.Duration) (bool, error) {
 	err := ck.write(key, dest, origin, TTL, int32(pb.OpType_CAST))
 	if err != nil {
 		if err == kvraft.ErrCASFaild {
@@ -550,17 +563,17 @@ func (ck *Clerk) CAS(key string, origin, dest []byte, TTL time.Duration) (bool, 
 	return true, nil
 }
 
-func (ck *Clerk) BatchWrite(p *Pipe) error {
+func (ck *clerkImpl) BatchWrite(p *Pipe) error {
 	return ck.write("", p.Marshal(), nil, 0, int32(pb.OpType_BatchT))
 }
 
-func (ck *Clerk) Pipeline() *Pipe {
+func (ck *clerkImpl) Pipeline() *Pipe {
 	return &Pipe{
 		ck: ck,
 	}
 }
 
-func (ck *Clerk) Get(key string) ([]byte, error) {
+func (ck *clerkImpl) Get(key string) ([]byte, error) {
 	r, err := ck.doGetValue(key, false)
 	if err != nil {
 		return nil, err
@@ -571,7 +584,7 @@ func (ck *Clerk) Get(key string) ([]byte, error) {
 	return nil, kvraft.ErrNil
 }
 
-func (ck *Clerk) GetWithPrefix(key string) ([][]byte, error) {
+func (ck *clerkImpl) GetWithPrefix(key string) ([][]byte, error) {
 	r, err := ck.doGetValue(key, true)
 	if err != nil {
 		return nil, err
@@ -582,24 +595,24 @@ func (ck *Clerk) GetWithPrefix(key string) ([][]byte, error) {
 	return nil, kvraft.ErrNil
 }
 
-func (ck *Clerk) Keys() ([]common.Pair, error) {
+func (ck *clerkImpl) Keys() ([]common.Pair, error) {
 	return ck.doGetKV("", true, pb.OpType_GetKeys, 0, 0)
 }
 
-func (ck *Clerk) KVs() ([]common.Pair, error) {
+func (ck *clerkImpl) KVs() ([]common.Pair, error) {
 	return ck.doGetKV("", true, pb.OpType_GetKVs, 0, 0)
 }
 
-func (ck *Clerk) KeysWithPage(pageSize, pageIndex int) ([]common.Pair, error) {
+func (ck *clerkImpl) KeysWithPage(pageSize, pageIndex int) ([]common.Pair, error) {
 	return ck.doGetKV("", true, pb.OpType_GetKeys, pageSize, pageIndex)
 }
 
-func (ck *Clerk) KVsWithPage(pageSize, pageIndex int) ([]common.Pair, error) {
+func (ck *clerkImpl) KVsWithPage(pageSize, pageIndex int) ([]common.Pair, error) {
 	return ck.doGetKV("", true, pb.OpType_GetKVs, pageSize, pageIndex)
 }
 
 // TODO 当TTL为零时，启动watchDog机制
-func (ck *Clerk) Lock(key string, TTL time.Duration) (id string, err error) {
+func (ck *clerkImpl) Lock(key string, TTL time.Duration) (id string, err error) {
 	r, err := uuid.NewRandom()
 	if err != nil {
 		firlog.Logger.Fatalln(err)
@@ -617,7 +630,7 @@ func (ck *Clerk) Lock(key string, TTL time.Duration) (id string, err error) {
 	return r.String(), nil
 }
 
-func (ck *Clerk) Unlock(key, id string) (bool, error) {
+func (ck *clerkImpl) Unlock(key, id string) (bool, error) {
 	ok, err := ck.CAS(key, []byte(id), nil, 0)
 	if err != nil {
 		firlog.Logger.Fatalln(err)
@@ -629,7 +642,7 @@ func (ck *Clerk) Unlock(key, id string) (bool, error) {
 	return true, nil
 }
 
-func (ck *Clerk) WatchDog(key string, value []byte) (cancel func()) {
+func (ck *clerkImpl) WatchDog(key string, value []byte) (cancel func()) {
 	// 选择最小5s的生存周期
 	var (
 		TTL  = time.Second * 5
