@@ -2,8 +2,11 @@ package gateway
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
 	"fmt"
+	"io/ioutil"
 	"log"
 	"net/http"
 	"strconv"
@@ -58,7 +61,40 @@ func (g *Gateway) Run() error {
 	r.POST(g.conf.BaseUrl+"/putCAS", g.putCAS)
 	r.DELETE(g.conf.BaseUrl+"/key", g.del)
 	r.DELETE(g.conf.BaseUrl+"/keysWithPrefix", g.delWithPrefix)
-	return r.Run(g.conf.Port)
+
+	// 加载TLS证书
+	certificate, err := tls.LoadX509KeyPair("certs/gateway.crt", "certs/gateway.key")
+	if err != nil {
+		firlog.Logger.Fatalf("无法加载网关证书: %v", err)
+	}
+
+	// 创建证书池并添加CA证书
+	certPool := x509.NewCertPool()
+	ca, err := ioutil.ReadFile("certs/ca.crt")
+	if err != nil {
+		firlog.Logger.Fatalf("无法读取CA证书: %v", err)
+	}
+	if ok := certPool.AppendCertsFromPEM(ca); !ok {
+		firlog.Logger.Fatal("无法将CA证书添加到证书池")
+	}
+
+	// 配置TLS
+	tlsConfig := &tls.Config{
+		Certificates: []tls.Certificate{certificate},
+		ClientCAs:    certPool,
+		ClientAuth:   tls.RequireAndVerifyClientCert,
+		MinVersion:   tls.VersionTLS12,
+	}
+
+	// 创建TLS服务器
+	server := &http.Server{
+		Addr:      g.conf.Port,
+		Handler:   r,
+		TLSConfig: tlsConfig,
+	}
+
+	// 启动TLS服务器
+	return server.ListenAndServeTLS("", "")
 }
 
 func (g *Gateway) LoadRouter(r *gin.Engine) {
