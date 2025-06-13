@@ -1,9 +1,10 @@
 package firconfig
 
 import (
-	"github.com/whosefriendA/firEtcd/pkg/firlog"
 	"log"
 	"os"
+
+	"github.com/whosefriendA/firEtcd/pkg/firlog"
 
 	yaml "gopkg.in/yaml.v3"
 )
