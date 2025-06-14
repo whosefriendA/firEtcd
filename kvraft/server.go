@@ -886,14 +886,14 @@ func StartKVServer(conf firconfig.Kvserver, me int, persister *raft.Persister, m
 	go kv.HandleApplych()
 
 	// 加载TLS证书
-	certificate, err := tls.LoadX509KeyPair("certs/server.crt", "certs/server.key")
+	certificate, err := tls.LoadX509KeyPair("/home/wanggang/firEtcd/pkg/tls/certs/server.crt", "/home/wanggang/firEtcd/pkg/tls/certs/server.key")
 	if err != nil {
 		firlog.Logger.Fatalf("无法加载服务器证书: %v", err)
 	}
 
 	// 创建证书池并添加CA证书
 	certPool := x509.NewCertPool()
-	ca, err := ioutil.ReadFile("certs/ca.crt")
+	ca, err := ioutil.ReadFile("/home/wanggang/firEtcd/pkg/tls/certs/ca.crt")
 	if err != nil {
 		firlog.Logger.Fatalf("无法读取CA证书: %v", err)
 	}
