@@ -1,3 +1,68 @@
 # firEtcd
-Create a useful etcd of mine
-This distributed kv storage provides grpc api and communicates in the form of protobuf data, and also encapsulates restful gateway to support http interface. It provides a watch mechanism similar to etcd, which can perform both one-time watch and continuous watch.
+
+`firEtcd` 是一个使用 Go 语言实现的分布式键值存储系统，其设计灵感来源于 [etcd](https.go-etcd.io/)，旨在提供一个可靠、高性能的分布式协调服务。
+
+## 核心特性
+
+- **分布式一致性与高可用**
+    - **Raft 协议**: 基于 Raft 协议确保数据在集群中的强一致性。
+    - **快照与恢复**: 支持通过快照（Snapshot）持久化状态机，实现快速的节点崩溃恢复。
+    - **分布式锁**: 内置简单易用的`分布式锁` API，并集成 Watchdog 租约机制，自动处理锁的租约和释放，防止因客户端故障导致的死锁。
+
+- **高性能存储与操作**
+    - **底层数据库**: 使用 [BuntDB](https://github.com/tidwall/buntdb) 作为存储引擎，支持内存模式和硬盘持久化。
+    - **丰富的操作语义**:
+        - 支持按前缀（Prefix）进行范围查询和删除。
+        - 提供 CAS (Compare-And-Swap) 原子操作，可用于实现乐观锁。
+        - 支持 `pipeline` 批量操作，减少网络开销，提升吞吐量。
+    - **TTL 键**: 支持为键设置存活时间（Time-To-Live），到期后自动删除。
+
+- **多协议与安全性**
+    - **双协议接口**: 同时支持 `gRPC` 和 `RESTful HTTP`，兼顾高性能与易用性。
+    - **安全通信**: 支持 `TLS `加密传输，保障数据在网络中的安全。
+
+- **高级功能**
+    - **Watch 机制**: 客户端可监视（Watch）指定的键或前缀，实时获取持续的数据变更通知。
+    - **服务发现**: 可作为服务注册与发现中心，构建弹性的微服务架构。
+    - **元标签 (MetaTags)**: 支持为键值对附加元数据，可用于实现版本控制、流量染色、灰度发布等高级功能。
+
+## 快速开始
+
+### 环境准备
+
+请确保您已经安装了 Go (版本 >= 1.23)。
+
+### 构建
+
+通过 `Makefile` 可以方便地构建项目：
+
+```bash
+make build
+```
+该命令会在 `bin/etcd/` 目录下生成 `etcd` 可执行文件。
+
+### 运行集群
+
+执行以下命令来启动一个默认包含3个节点的集群：
+
+```bash
+make run
+```
+
+该命令会后台启动3个 `etcd` 实例，并使用 `cluster_config/` 目录下的配置文件。
+
+### 停止集群
+
+使用以下命令可以停止所有正在运行的 `etcd` 实例：
+
+```bash
+make stop
+```
+
+
+### 清理
+
+清理构建产物：
+```bash
+make clean
+```
