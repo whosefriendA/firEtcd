@@ -20,7 +20,7 @@ type KVClient struct {
 
 func NewKvClient(addr string) *KVClient {
 	// 加载客户端证书
-	certificate, err := tls.LoadX509KeyPair("certs/client.crt", "certs/client.key")
+	certificate, err := tls.LoadX509KeyPair("/home/wanggang/firEtcd/pkg/tls/certs/client.crt", "/home/wanggang/firEtcd/pkg/tls/certs/client.key")
 	if err != nil {
 		firlog.Logger.Errorf("无法加载客户端证书: %v", err)
 		return nil
@@ -28,7 +28,7 @@ func NewKvClient(addr string) *KVClient {
 
 	// 创建证书池并添加CA证书
 	certPool := x509.NewCertPool()
-	ca, err := ioutil.ReadFile("certs/ca.crt")
+	ca, err := ioutil.ReadFile("/home/wanggang/firEtcd/pkg/tls/certs/ca.crt")
 	if err != nil {
 		firlog.Logger.Errorf("无法读取CA证书: %v", err)
 		return nil
