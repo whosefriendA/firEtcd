@@ -63,14 +63,14 @@ func (g *Gateway) Run() error {
 	r.DELETE(g.conf.BaseUrl+"/keysWithPrefix", g.delWithPrefix)
 
 	// 加载TLS证书
-	certificate, err := tls.LoadX509KeyPair("certs/gateway.crt", "certs/gateway.key")
+	certificate, err := tls.LoadX509KeyPair("/home/wanggang/firEtcd/pkg/tls/certs/gateway.crt", "/home/wanggang/firEtcd/pkg/tls/certs/gateway.key")
 	if err != nil {
 		firlog.Logger.Fatalf("无法加载网关证书: %v", err)
 	}
 
 	// 创建证书池并添加CA证书
 	certPool := x509.NewCertPool()
-	ca, err := ioutil.ReadFile("certs/ca.crt")
+	ca, err := ioutil.ReadFile("/home/wanggang/firEtcd/pkg/tls/certs/ca.crt")
 	if err != nil {
 		firlog.Logger.Fatalf("无法读取CA证书: %v", err)
 	}
