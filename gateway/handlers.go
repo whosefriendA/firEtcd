@@ -245,19 +245,18 @@ func (g *Gateway) get(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, fmt.Errorf("query parameter 'key' is required"))
 		return
 	}
-
 	value, err := g.ck.Get(key)
 	if err != nil {
-		writeError(w, http.StatusNotFound, err)
+		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
-
 	if value == nil {
-		writeError(w, http.StatusNotFound, fmt.Errorf("key '%s' not found", key))
+		writeError(w, http.StatusNotFound, fmt.Errorf("key not found"))
 		return
 	}
-
-	writeJSON(w, http.StatusOK, map[string]string{key: common.BytesToString(value)})
+	writeJSON(w, http.StatusOK, map[string]string{
+		"value": string(value),
+	})
 }
 
 func (g *Gateway) getWithPrefix(w http.ResponseWriter, r *http.Request) {
