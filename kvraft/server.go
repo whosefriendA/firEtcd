@@ -6,7 +6,9 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/gob"
+	"google.golang.org/grpc/credentials"
 	"io/ioutil"
+	"net"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -21,8 +23,7 @@ import (
 	"github.com/whosefriendA/firEtcd/raft"
 
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/codes" // 为 gRPC 状态添加
-	"google.golang.org/grpc/credentials"
+	"google.golang.org/grpc/codes"  // 为 gRPC 状态添加
 	"google.golang.org/grpc/status" // 为 gRPC 状态添加
 )
 
@@ -907,16 +908,18 @@ func StartKVServer(conf firconfig.Kvserver, me int, persister *raft.Persister, m
 		ClientCAs:    certPool,
 		ClientAuth:   tls.RequireAndVerifyClientCert,
 		MinVersion:   tls.VersionTLS12,
+		NextProtos:   []string{"h2"}, // 为gRPC启用HTTP/2
 	}
 
-	// 创建TLS监听器
-	lis, err := tls.Listen("tcp", conf.Addr+conf.Port, tlsConfig)
+	creds := credentials.NewTLS(tlsConfig)
+
+	lis, err := net.Listen("tcp", conf.Addr+conf.Port)
 	if err != nil {
 		firlog.Logger.Fatalln("error: etcd start failed", err)
 	}
 
 	// 创建gRPC服务器，启用TLS
-	gServer := grpc.NewServer(grpc.Creds(credentials.NewTLS(tlsConfig)))
+	gServer := grpc.NewServer(grpc.Creds(creds))
 	pb.RegisterKvserverServer(gServer, kv)
 	go func() {
 		if err := gServer.Serve(lis); err != nil {
