@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/gob"
+	"fmt"
 	"io"
 	"math/big"
 	"sync"
@@ -246,6 +247,7 @@ func (c *Clerk) watchEtcd() {
 	for {
 		for i, kvclient := range c.servers {
 			if !kvclient.Valid {
+				fmt.Printf("Clerk: try connect to etcd %s\n", c.conf.EtcdAddrs[i])
 				if kvclient.Realconn != nil {
 					kvclient.Realconn.Close()
 				}
@@ -269,6 +271,7 @@ func MakeClerk(conf firconfig.Clerk) *Clerk {
 		ck.servers[i] = new(kvraft.KVClient)
 		ck.servers[i].Valid = false
 	}
+	fmt.Printf("Clerk etcd addrs: %+v\n", conf.EtcdAddrs)
 	ck.nextSendLocalId = int(nrand() % int64(len(conf.EtcdAddrs)))
 	ck.LatestOffset = 1
 	ck.clientId = nrand()
@@ -367,6 +370,7 @@ func (ck *Clerk) read(args *pb.GetArgs) ([][]byte, error) {
 
 		lastSendLocalId = ck.nextSendLocalId
 		if err != nil {
+			firlog.Logger.Warnf("gRPC Get for key '%s' failed with server %d: %v", args.Key, ck.nextSendLocalId, err)
 			// firLog.Logger.Infof("clinet [%d] [Get]:[lost] args[%v]", ck.clientId, args)
 			//对面失联，那就换下一个继续发
 			ck.changeNextSendId()
@@ -476,6 +480,7 @@ func (ck *Clerk) write(key string, value, oriValue []byte, TTL time.Duration, op
 
 		lastSendLocalId = ck.nextSendLocalId
 		if err != nil {
+			firlog.Logger.Warnf("gRPC PutAppend for key '%s' failed with server %d: %v", args.Key, ck.nextSendLocalId, err)
 			// firLog.Logger.Infof("clinet [%d] [PutAppend]:[lost] args[%v] err:", ck.clientId, args, err)
 			//对面失联，那就换下一个继续发
 			ck.changeNextSendId()
