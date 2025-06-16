@@ -10,6 +10,8 @@ import (
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
+
+	"fmt"
 )
 
 type KVClient struct {
@@ -42,6 +44,7 @@ func NewKvClient(addr string) *KVClient {
 	tlsConfig := &tls.Config{
 		Certificates: []tls.Certificate{certificate},
 		RootCAs:      certPool,
+		ServerName:   "localhost", // 验证服务器主机名
 		MinVersion:   tls.VersionTLS12,
 	}
 
@@ -51,6 +54,7 @@ func NewKvClient(addr string) *KVClient {
 	// 使用TLS凭证创建gRPC连接
 	conn, err := grpc.Dial(addr, grpc.WithTransportCredentials(creds))
 	if err != nil {
+		fmt.Printf("gRPC dial error: %v\n", err)
 		firlog.Logger.Errorf("连接失败: %v", err)
 		return nil
 	}
