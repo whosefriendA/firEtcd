@@ -23,13 +23,14 @@ import (
 	"bytes"
 	"context"
 	"encoding/gob"
-	"github.com/whosefriendA/firEtcd/pkg/firlog"
 	"math/rand"
 	"net"
 	"sort"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/whosefriendA/firEtcd/pkg/firlog"
 
 	"github.com/whosefriendA/firEtcd/pkg/firconfig"
 	"github.com/whosefriendA/firEtcd/proto/pb"
