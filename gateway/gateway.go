@@ -3,11 +3,12 @@ package gateway
 import (
 	"crypto/tls"
 	"crypto/x509"
+	"io/ioutil"
+	"net/http"
+
 	"github.com/whosefriendA/firEtcd/client"
 	"github.com/whosefriendA/firEtcd/pkg/firconfig"
 	"github.com/whosefriendA/firEtcd/pkg/firlog"
-	"io/ioutil"
-	"net/http"
 )
 
 type Gateway struct {
