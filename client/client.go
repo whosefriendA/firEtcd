@@ -511,7 +511,7 @@ func (ck *Clerk) write(key string, value, oriValue []byte, TTL time.Duration, op
 				//记录对方返回的不可靠leaderId
 				if ck.sToc[reply.LeaderId] == -1 { //但是本地还没初始化呢，那就往下一个发
 					ck.changeNextSendId()
-				} else { //本地还真知道，那下一个就发它所指定的localServerAddress
+				} else { //本地知道，那下一个就发它所指定的localServerAddress
 					ck.nextSendLocalId = ck.sToc[reply.LeaderId]
 				}
 

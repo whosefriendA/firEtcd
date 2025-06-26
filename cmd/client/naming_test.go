@@ -44,7 +44,7 @@ func TestNaming(t *testing.T) {
 	firlog.Logger.Infoln("success set node TTL 800ms ")
 
 	// check node
-	nodes, err := client.GetNode(ck, "comet")
+	nodes, err := client.GetNode(ck, "comet", "")
 	if err != nil {
 		firlog.Logger.Fatalln(err)
 	}
@@ -57,7 +57,7 @@ func TestNaming(t *testing.T) {
 	firlog.Logger.Infoln("sleep 1000ms")
 
 	// check node
-	nodes, err = client.GetNode(ck, "comet")
+	nodes, err = client.GetNode(ck, "comet", "")
 	if err != nil {
 		firlog.Logger.Fatalln(err)
 	}
@@ -88,7 +88,7 @@ func TestNamingWatch(t *testing.T) {
 	firlog.Logger.Infoln("success set node WatchDog ")
 
 	// check node
-	nodes, err := client.GetNode(ck, "comet")
+	nodes, err := client.GetNode(ck, "comet", "")
 	if err != nil {
 		firlog.Logger.Fatalln(err)
 	}
@@ -105,7 +105,7 @@ func TestNamingWatch(t *testing.T) {
 
 	// check node
 	firlog.Logger.Infoln("after cancle-immidiately")
-	nodes, err = client.GetNode(ck, "comet")
+	nodes, err = client.GetNode(ck, "comet", "")
 	if err != nil {
 		firlog.Logger.Fatalln(err)
 	}
@@ -119,7 +119,7 @@ func TestNamingWatch(t *testing.T) {
 	// check node
 	time.Sleep(time.Second * 6)
 	firlog.Logger.Infoln("after cancle 6 second")
-	nodes, err = client.GetNode(ck, "comet")
+	nodes, err = client.GetNode(ck, "comet", "")
 	if err != nil {
 		firlog.Logger.Fatalln(err)
 	}
