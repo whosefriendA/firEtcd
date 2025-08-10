@@ -14,13 +14,9 @@ go.sum
 
 .idea/
 
-# TLS证书相关文件 - 安全考虑
-*.key          # 私钥文件（必须忽略）
-*.crt          # 证书文件（避免暴露证书信息）
-*.csr          # 证书签名请求文件
-*.srl          # 序列号文件
-*.pem          # PEM格式证书文件
+*.key
+*.crt
+*.csr
+*.srl
+*.pem
 
-# 但保留TLS相关的脚本和配置文件
-!pkg/tls/certs/generate_certs.sh
-!pkg/tls/certs/openssl.cnf
