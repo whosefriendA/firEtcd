@@ -11,3 +11,13 @@ rafts:
       port: :32302
 databasepath: "data1"
 maxraftstate: 100000
+
+# TLS配置
+tls:
+  certFile: "../../pkg/tls/certs/server.crt"
+  keyFile: "../../pkg/tls/certs/server.key"
+  caFile: "../../pkg/tls/certs/ca.crt"
+  clientAuth: true
+  minVersion: "1.2"
+  maxVersion: "1.3"
+  insecureSkipVerify: false

@@ -1,4 +1,4 @@
-package certs
+package tls
 
 import (
 	"crypto/tls"
@@ -172,36 +172,36 @@ func TestTLSEndToEnd(t *testing.T) {
 
 	// 测试证书主题
 	t.Run("测试证书主题", func(t *testing.T) {
-		testCases := []struct {
-			path        string
-			expectedCN  string
-			isCA        bool
-			expectedOrg string
-		}{
-			{"/home/wanggang/firEtcd/pkg/tls/certs/ca.crt", "MyCA", true, ""},
-			{"/home/wanggang/firEtcd/pkg/tls/certs/server.crt", "server", false, ""},
-			{"/home/wanggang/firEtcd/pkg/tls/certs/client.crt", "client", false, ""},
-			{"/home/wanggang/firEtcd/pkg/tls/certs/gateway.crt", "gateway", false, ""},
+		// 定义期望的主题
+		expectedSubjects := map[string]string{
+			"/home/wanggang/firEtcd/pkg/tls/certs/server.crt":  "server",
+			"/home/wanggang/firEtcd/pkg/tls/certs/client.crt":  "client",
+			"/home/wanggang/firEtcd/pkg/tls/certs/gateway.crt": "gateway",
+			"/home/wanggang/firEtcd/pkg/tls/certs/ca.crt":      "CA",
 		}
 
-		for _, tc := range testCases {
-			certPEM, err := ioutil.ReadFile(tc.path)
+		for certPath, expectedSubject := range expectedSubjects {
+			certPEM, err := ioutil.ReadFile(certPath)
 			if err != nil {
-				t.Fatalf("无法读取证书 %s: %v", tc.path, err)
+				t.Fatalf("无法读取证书 %s: %v", certPath, err)
 			}
 
+			// 解码 PEM 到 DER
 			block, _ := pem.Decode(certPEM)
 			if block == nil {
-				t.Fatalf("无法解码PEM证书 %s", tc.path)
+				t.Fatalf("无法解码 PEM 格式证书: %s", certPath)
 			}
 
+			// 解析 DER 到 x509.Certificate
 			cert, err := x509.ParseCertificate(block.Bytes)
 			if err != nil {
-				t.Fatalf("无法解析证书 %s: %v", tc.path, err)
+				t.Fatalf("无法解析证书 %s: %v", certPath, err)
 			}
 
-			if cert.Subject.CommonName != tc.expectedCN {
-				t.Errorf("证书 %s 主题不匹配，期望: %s, 实际: %s", tc.path, tc.expectedCN, cert.Subject.CommonName)
+			// 验证证书主题
+			if cert.Subject.CommonName != expectedSubject {
+				t.Fatalf("证书 %s 主题不匹配，期望: %s, 实际: %s",
+					certPath, expectedSubject, cert.Subject.CommonName)
 			}
 		}
 	})

@@ -14,6 +14,11 @@ func (c *RaftEnds) Default() {
 	*c = DefaultRaftEnds()
 }
 
+func (c *RaftEnds) Validate() error {
+	// RaftEnds配置验证逻辑可以在这里添加
+	return nil
+}
+
 func DefaultRaftEnds() RaftEnds {
 	return RaftEnds{
 		Me: 0,

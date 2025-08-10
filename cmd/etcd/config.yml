@@ -10,3 +10,13 @@ rafts:
     - addr: 127.0.0.1
       port: :32302
 databasepath: "data"
+
+# TLS配置（可选）
+tls:
+  certFile: "certs/server.crt"
+  keyFile: "certs/server.key"
+  caFile: "certs/ca.crt"
+  clientAuth: true
+  minVersion: "1.2"
+  maxVersion: "1.3"
+  insecureSkipVerify: false
