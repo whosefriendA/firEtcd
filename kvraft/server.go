@@ -17,7 +17,7 @@ import (
 	"github.com/whosefriendA/firEtcd/pkg/firlog"
 
 	"github.com/whosefriendA/firEtcd/common"
-	buntdbx "github.com/whosefriendA/firEtcd/pkg/buntdb"
+	bboltdb "github.com/whosefriendA/firEtcd/pkg/bboltdb"
 	"github.com/whosefriendA/firEtcd/pkg/firconfig"
 	"github.com/whosefriendA/firEtcd/proto/pb"
 	"github.com/whosefriendA/firEtcd/raft"
@@ -813,7 +813,7 @@ func (kv *KVServer) readPersist(data []byte) {
 		firlog.Logger.Fatalf("decode err:%s", err)
 	}
 
-	newdb := buntdbx.NewDB()
+	newdb := bboltdb.NewDB()
 	dbData := make([]byte, 0)
 	err := d.Decode(&dbData)
 	if err != nil {
@@ -872,7 +872,7 @@ func StartKVServer(conf firconfig.Kvserver, me int, persister *raft.Persister, m
 		applyCh:          make(chan raft.ApplyMsg),
 		lastAppliedIndex: 0,
 		lastIncludeIndex: 0,
-		db:               buntdbx.NewDB(),
+		db:               bboltdb.NewDB(),
 		lastIndexCh:      make(chan int),
 		duplicateMap:     make(map[int64]duplicateType),
 		watcherManager:   NewWatcherManager(),

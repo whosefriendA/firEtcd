@@ -21,6 +21,8 @@ require (
 	gopkg.in/yaml.v3 v3.0.1
 )
 
+require go.etcd.io/bbolt v1.4.3
+
 require (
 	github.com/BurntSushi/toml v1.5.0 // indirect
 	github.com/grpc-ecosystem/grpc-gateway/v2 v2.26.3 // indirect
