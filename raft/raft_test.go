@@ -1,2390 +1,352 @@
 package raft
 
 import (
-	"context"
-	"reflect"
+	"bytes"
+	"encoding/gob"
+	"fmt"
+	"log"
+	"math/rand"
+	"os"
+	"strconv"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/whosefriendA/firEtcd/pkg/firconfig"
-	"github.com/whosefriendA/firEtcd/proto/pb"
 )
 
-func TestRaft_GetCommitIndex(t *testing.T) {
-	type fields struct {
-		mu                    sync.Mutex
-		peers                 []*RaftEnd
-		persister             *Persister
-		me                    int
-		dead                  int32
-		state                 int32
-		currentTerm           int
-		votedFor              int
-		log                   []pb.LogType
-		lastIncludeIndex      int
-		lastIncludeTerm       int
-		commitIndex           int
-		lastApplied           int
-		nextIndex             []int
-		matchIndex            []int
-		lastHearBeatTime      time.Time
-		lastSendHeartbeatTime time.Time
-		leaderId              int
-		applyCh               chan ApplyMsg
-		applyChTerm           chan ApplyMsg
-		SnapshotDate          []byte
-		IisBack               bool
-		IisBackIndex          int
+// Jepsen-style testing additions start here
+
+// KVCommand defines the operation on the key-value store.
+type KVCommand struct {
+	Op    string // "Append"
+	Key   string
+	Value string
+}
+
+// HistoryEntry records a client operation and its result.
+type HistoryEntry struct {
+	Op       KVCommand
+	Success  bool
+	Start    time.Time
+	End      time.Time
+	ClientId int
+}
+
+// JepsenHarness manages the entire test setup.
+type JepsenHarness struct {
+	t *testing.T
+
+	n          int // Number of raft peers
+	rafts      []*Raft
+	persisters []*Persister
+	applyChs   []chan ApplyMsg
+	kvStores   []map[string]string
+
+	mu         sync.Mutex
+	nodeStatus []bool // true if node is alive
+
+	conf firconfig.RaftEnds
+
+	history   []HistoryEntry
+	historyMu sync.Mutex
+
+	done chan struct{}
+	wg   sync.WaitGroup
+}
+
+// NewJepsenHarness creates a new test harness.
+func NewJepsenHarness(t *testing.T, n int) *JepsenHarness {
+	// Suppress log output from the Raft implementation
+	log.SetOutput(os.Stderr)
+
+	h := &JepsenHarness{
+		t:          t,
+		n:          n,
+		rafts:      make([]*Raft, n),
+		persisters: make([]*Persister, n),
+		applyChs:   make([]chan ApplyMsg, n),
+		kvStores:   make([]map[string]string, n),
+		nodeStatus: make([]bool, n),
+		done:       make(chan struct{}),
 	}
-	tests := []struct {
-		name   string
-		fields fields
-		want   int
-	}{
-		// TODO: Add test cases.
+
+	endpoints := make([]firconfig.RaftEnd, n)
+	for i := 0; i < n; i++ {
+		// Use high port numbers to avoid conflicts
+		port := 12345 + i
+		endpoints[i] = firconfig.RaftEnd{
+			Addr: "127.0.0.1",
+			Port: ":" + strconv.Itoa(port),
+		}
 	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			rf := &Raft{
-				mu:                    tt.fields.mu,
-				peers:                 tt.fields.peers,
-				persister:             tt.fields.persister,
-				me:                    tt.fields.me,
-				dead:                  tt.fields.dead,
-				state:                 tt.fields.state,
-				currentTerm:           tt.fields.currentTerm,
-				votedFor:              tt.fields.votedFor,
-				log:                   tt.fields.log,
-				lastIncludeIndex:      tt.fields.lastIncludeIndex,
-				lastIncludeTerm:       tt.fields.lastIncludeTerm,
-				commitIndex:           tt.fields.commitIndex,
-				lastApplied:           tt.fields.lastApplied,
-				nextIndex:             tt.fields.nextIndex,
-				matchIndex:            tt.fields.matchIndex,
-				lastHearBeatTime:      tt.fields.lastHearBeatTime,
-				lastSendHeartbeatTime: tt.fields.lastSendHeartbeatTime,
-				leaderId:              tt.fields.leaderId,
-				applyCh:               tt.fields.applyCh,
-				applyChTerm:           tt.fields.applyChTerm,
-				SnapshotDate:          tt.fields.SnapshotDate,
-				IisBack:               tt.fields.IisBack,
-				IisBackIndex:          tt.fields.IisBackIndex,
+
+	for i := 0; i < n; i++ {
+		h.conf.Endpoints = endpoints
+		h.conf.Me = i
+	}
+
+	return h
+}
+
+// StartNode (re)starts a single node.
+func (h *JepsenHarness) StartNode(nodeId int) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	h.applyChs[nodeId] = make(chan ApplyMsg, 100)
+	// Create a new persister or use the existing one to simulate restart
+	if h.persisters[nodeId] == nil {
+		basePath := fmt.Sprintf("%s/firEtcd_test/%d/", os.TempDir(), nodeId)
+		h.persisters[nodeId] = MakePersister("raftstate.bin", "snapshot.bin", basePath)
+	}
+	h.kvStores[nodeId] = make(map[string]string)
+
+	nodeConf := h.conf
+	nodeConf.Me = nodeId
+
+	h.rafts[nodeId] = Make(nodeId, h.persisters[nodeId], h.applyChs[nodeId], nodeConf)
+	h.nodeStatus[nodeId] = true
+
+	h.wg.Add(1)
+	go h.applyLoop(nodeId)
+}
+
+// StopNode kills a single node.
+func (h *JepsenHarness) StopNode(nodeId int) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	if !h.nodeStatus[nodeId] {
+		return // Already stopped
+	}
+
+	h.rafts[nodeId].Kill()
+	h.nodeStatus[nodeId] = false
+	// We don't close the applyCh immediately, Shutdown will handle the main done channel
+}
+
+// applyLoop simulates the state machine for a single node.
+func (h *JepsenHarness) applyLoop(nodeId int) {
+	defer h.wg.Done()
+	for {
+		select {
+		case <-h.done:
+			return
+		case msg := <-h.applyChs[nodeId]:
+			if msg.CommandValid {
+				var cmd KVCommand
+				d := gob.NewDecoder(bytes.NewBuffer(msg.Command))
+				if err := d.Decode(&cmd); err == nil {
+					h.mu.Lock()
+					if cmd.Op == "Append" {
+						h.kvStores[nodeId][cmd.Key] += cmd.Value + ";"
+					}
+					h.mu.Unlock()
+				}
 			}
-			if got := rf.GetCommitIndex(); got != tt.want {
-				t.Errorf("Raft.GetCommitIndex() = %v, want %v", got, tt.want)
-			}
-		})
+		}
 	}
 }
 
-func TestRaft_Applyer(t *testing.T) {
-	type fields struct {
-		mu                    sync.Mutex
-		peers                 []*RaftEnd
-		persister             *Persister
-		me                    int
-		dead                  int32
-		state                 int32
-		currentTerm           int
-		votedFor              int
-		log                   []pb.LogType
-		lastIncludeIndex      int
-		lastIncludeTerm       int
-		commitIndex           int
-		lastApplied           int
-		nextIndex             []int
-		matchIndex            []int
-		lastHearBeatTime      time.Time
-		lastSendHeartbeatTime time.Time
-		leaderId              int
-		applyCh               chan ApplyMsg
-		applyChTerm           chan ApplyMsg
-		SnapshotDate          []byte
-		IisBack               bool
-		IisBackIndex          int
+// StartCluster starts all raft nodes.
+func (h *JepsenHarness) StartCluster() {
+	for i := 0; i < h.n; i++ {
+		h.StartNode(i)
 	}
-	tests := []struct {
-		name   string
-		fields fields
-	}{
-		// TODO: Add test cases.
+	// Give time for leader election
+	time.Sleep(2 * time.Second)
+}
+
+// Shutdown kills all raft nodes and waits for goroutines to exit.
+func (h *JepsenHarness) Shutdown() {
+	close(h.done)
+	for i := 0; i < h.n; i++ {
+		h.mu.Lock()
+		if h.nodeStatus[i] {
+			h.rafts[i].Kill()
+		}
+		h.mu.Unlock()
 	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			rf := &Raft{
-				mu:                    tt.fields.mu,
-				peers:                 tt.fields.peers,
-				persister:             tt.fields.persister,
-				me:                    tt.fields.me,
-				dead:                  tt.fields.dead,
-				state:                 tt.fields.state,
-				currentTerm:           tt.fields.currentTerm,
-				votedFor:              tt.fields.votedFor,
-				log:                   tt.fields.log,
-				lastIncludeIndex:      tt.fields.lastIncludeIndex,
-				lastIncludeTerm:       tt.fields.lastIncludeTerm,
-				commitIndex:           tt.fields.commitIndex,
-				lastApplied:           tt.fields.lastApplied,
-				nextIndex:             tt.fields.nextIndex,
-				matchIndex:            tt.fields.matchIndex,
-				lastHearBeatTime:      tt.fields.lastHearBeatTime,
-				lastSendHeartbeatTime: tt.fields.lastSendHeartbeatTime,
-				leaderId:              tt.fields.leaderId,
-				applyCh:               tt.fields.applyCh,
-				applyChTerm:           tt.fields.applyChTerm,
-				SnapshotDate:          tt.fields.SnapshotDate,
-				IisBack:               tt.fields.IisBack,
-				IisBackIndex:          tt.fields.IisBackIndex,
+	h.wg.Wait()
+}
+
+// ClientLoop simulates a client sending operations.
+func (h *JepsenHarness) ClientLoop(clientId int, key string) {
+	h.wg.Add(1)
+	defer h.wg.Done()
+
+	opId := 0
+	for {
+		select {
+		case <-h.done:
+			return
+		default:
+			opId++
+			value := fmt.Sprintf("%d-%d", clientId, opId)
+			cmd := KVCommand{Op: "Append", Key: key, Value: value}
+
+			var cmdBytes bytes.Buffer
+			e := gob.NewEncoder(&cmdBytes)
+			e.Encode(cmd)
+
+			start := time.Now()
+			success := false
+			// Try to send the command for a while
+			for i := 0; i < 10 && !success; i++ {
+				h.mu.Lock()
+				// Find a node that is currently alive to send the command to
+				leaderHint := rand.Intn(h.n)
+				if !h.nodeStatus[leaderHint] {
+					h.mu.Unlock()
+					time.Sleep(10 * time.Millisecond)
+					continue
+				}
+				rf := h.rafts[leaderHint]
+				h.mu.Unlock()
+
+				_, _, isLeader := rf.Start(cmdBytes.Bytes())
+
+				if isLeader {
+					success = true
+					break
+				}
+				time.Sleep(50 * time.Millisecond)
 			}
-			rf.Applyer()
-		})
+			end := time.Now()
+
+			h.historyMu.Lock()
+			h.history = append(h.history, HistoryEntry{
+				Op:       cmd,
+				Success:  success,
+				Start:    start,
+				End:      end,
+				ClientId: clientId,
+			})
+			h.historyMu.Unlock()
+
+			time.Sleep(time.Duration(50+rand.Intn(50)) * time.Millisecond)
+		}
 	}
 }
 
-func TestRaft_lastIndex(t *testing.T) {
-	type fields struct {
-		mu                    sync.Mutex
-		peers                 []*RaftEnd
-		persister             *Persister
-		me                    int
-		dead                  int32
-		state                 int32
-		currentTerm           int
-		votedFor              int
-		log                   []pb.LogType
-		lastIncludeIndex      int
-		lastIncludeTerm       int
-		commitIndex           int
-		lastApplied           int
-		nextIndex             []int
-		matchIndex            []int
-		lastHearBeatTime      time.Time
-		lastSendHeartbeatTime time.Time
-		leaderId              int
-		applyCh               chan ApplyMsg
-		applyChTerm           chan ApplyMsg
-		SnapshotDate          []byte
-		IisBack               bool
-		IisBackIndex          int
-	}
-	tests := []struct {
-		name   string
-		fields fields
-		want   int
-	}{
-		// TODO: Add test cases.
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			rf := &Raft{
-				mu:                    tt.fields.mu,
-				peers:                 tt.fields.peers,
-				persister:             tt.fields.persister,
-				me:                    tt.fields.me,
-				dead:                  tt.fields.dead,
-				state:                 tt.fields.state,
-				currentTerm:           tt.fields.currentTerm,
-				votedFor:              tt.fields.votedFor,
-				log:                   tt.fields.log,
-				lastIncludeIndex:      tt.fields.lastIncludeIndex,
-				lastIncludeTerm:       tt.fields.lastIncludeTerm,
-				commitIndex:           tt.fields.commitIndex,
-				lastApplied:           tt.fields.lastApplied,
-				nextIndex:             tt.fields.nextIndex,
-				matchIndex:            tt.fields.matchIndex,
-				lastHearBeatTime:      tt.fields.lastHearBeatTime,
-				lastSendHeartbeatTime: tt.fields.lastSendHeartbeatTime,
-				leaderId:              tt.fields.leaderId,
-				applyCh:               tt.fields.applyCh,
-				applyChTerm:           tt.fields.applyChTerm,
-				SnapshotDate:          tt.fields.SnapshotDate,
-				IisBack:               tt.fields.IisBack,
-				IisBackIndex:          tt.fields.IisBackIndex,
-			}
-			if got := rf.lastIndex(); got != tt.want {
-				t.Errorf("Raft.lastIndex() = %v, want %v", got, tt.want)
-			}
-		})
-	}
-}
+// NemesisLoop introduces failures (killing and restarting nodes).
+func (h *JepsenHarness) NemesisLoop() {
+	h.wg.Add(1)
+	defer h.wg.Done()
 
-func TestRaft_lastTerm(t *testing.T) {
-	type fields struct {
-		mu                    sync.Mutex
-		peers                 []*RaftEnd
-		persister             *Persister
-		me                    int
-		dead                  int32
-		state                 int32
-		currentTerm           int
-		votedFor              int
-		log                   []pb.LogType
-		lastIncludeIndex      int
-		lastIncludeTerm       int
-		commitIndex           int
-		lastApplied           int
-		nextIndex             []int
-		matchIndex            []int
-		lastHearBeatTime      time.Time
-		lastSendHeartbeatTime time.Time
-		leaderId              int
-		applyCh               chan ApplyMsg
-		applyChTerm           chan ApplyMsg
-		SnapshotDate          []byte
-		IisBack               bool
-		IisBackIndex          int
-	}
-	tests := []struct {
-		name   string
-		fields fields
-		want   int
-	}{
-		// TODO: Add test cases.
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			rf := &Raft{
-				mu:                    tt.fields.mu,
-				peers:                 tt.fields.peers,
-				persister:             tt.fields.persister,
-				me:                    tt.fields.me,
-				dead:                  tt.fields.dead,
-				state:                 tt.fields.state,
-				currentTerm:           tt.fields.currentTerm,
-				votedFor:              tt.fields.votedFor,
-				log:                   tt.fields.log,
-				lastIncludeIndex:      tt.fields.lastIncludeIndex,
-				lastIncludeTerm:       tt.fields.lastIncludeTerm,
-				commitIndex:           tt.fields.commitIndex,
-				lastApplied:           tt.fields.lastApplied,
-				nextIndex:             tt.fields.nextIndex,
-				matchIndex:            tt.fields.matchIndex,
-				lastHearBeatTime:      tt.fields.lastHearBeatTime,
-				lastSendHeartbeatTime: tt.fields.lastSendHeartbeatTime,
-				leaderId:              tt.fields.leaderId,
-				applyCh:               tt.fields.applyCh,
-				applyChTerm:           tt.fields.applyChTerm,
-				SnapshotDate:          tt.fields.SnapshotDate,
-				IisBack:               tt.fields.IisBack,
-				IisBackIndex:          tt.fields.IisBackIndex,
-			}
-			if got := rf.lastTerm(); got != tt.want {
-				t.Errorf("Raft.lastTerm() = %v, want %v", got, tt.want)
-			}
-		})
-	}
-}
+	for {
+		select {
+		case <-h.done:
+			return
+		case <-time.After(time.Duration(500+rand.Intn(500)) * time.Millisecond):
+			nodeId := rand.Intn(h.n)
+			h.t.Logf("Nemesis: Killing node %d", nodeId)
+			h.StopNode(nodeId)
 
-func TestRaft_index2LogPos(t *testing.T) {
-	type fields struct {
-		mu                    sync.Mutex
-		peers                 []*RaftEnd
-		persister             *Persister
-		me                    int
-		dead                  int32
-		state                 int32
-		currentTerm           int
-		votedFor              int
-		log                   []pb.LogType
-		lastIncludeIndex      int
-		lastIncludeTerm       int
-		commitIndex           int
-		lastApplied           int
-		nextIndex             []int
-		matchIndex            []int
-		lastHearBeatTime      time.Time
-		lastSendHeartbeatTime time.Time
-		leaderId              int
-		applyCh               chan ApplyMsg
-		applyChTerm           chan ApplyMsg
-		SnapshotDate          []byte
-		IisBack               bool
-		IisBackIndex          int
-	}
-	type args struct {
-		index int
-	}
-	tests := []struct {
-		name    string
-		fields  fields
-		args    args
-		wantPos int
-	}{
-		// TODO: Add test cases.
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			rf := &Raft{
-				mu:                    tt.fields.mu,
-				peers:                 tt.fields.peers,
-				persister:             tt.fields.persister,
-				me:                    tt.fields.me,
-				dead:                  tt.fields.dead,
-				state:                 tt.fields.state,
-				currentTerm:           tt.fields.currentTerm,
-				votedFor:              tt.fields.votedFor,
-				log:                   tt.fields.log,
-				lastIncludeIndex:      tt.fields.lastIncludeIndex,
-				lastIncludeTerm:       tt.fields.lastIncludeTerm,
-				commitIndex:           tt.fields.commitIndex,
-				lastApplied:           tt.fields.lastApplied,
-				nextIndex:             tt.fields.nextIndex,
-				matchIndex:            tt.fields.matchIndex,
-				lastHearBeatTime:      tt.fields.lastHearBeatTime,
-				lastSendHeartbeatTime: tt.fields.lastSendHeartbeatTime,
-				leaderId:              tt.fields.leaderId,
-				applyCh:               tt.fields.applyCh,
-				applyChTerm:           tt.fields.applyChTerm,
-				SnapshotDate:          tt.fields.SnapshotDate,
-				IisBack:               tt.fields.IisBack,
-				IisBackIndex:          tt.fields.IisBackIndex,
-			}
-			if gotPos := rf.index2LogPos(tt.args.index); gotPos != tt.wantPos {
-				t.Errorf("Raft.index2LogPos() = %v, want %v", gotPos, tt.wantPos)
-			}
-		})
-	}
-}
-
-func TestRaft_GetState(t *testing.T) {
-	type fields struct {
-		mu                    sync.Mutex
-		peers                 []*RaftEnd
-		persister             *Persister
-		me                    int
-		dead                  int32
-		state                 int32
-		currentTerm           int
-		votedFor              int
-		log                   []pb.LogType
-		lastIncludeIndex      int
-		lastIncludeTerm       int
-		commitIndex           int
-		lastApplied           int
-		nextIndex             []int
-		matchIndex            []int
-		lastHearBeatTime      time.Time
-		lastSendHeartbeatTime time.Time
-		leaderId              int
-		applyCh               chan ApplyMsg
-		applyChTerm           chan ApplyMsg
-		SnapshotDate          []byte
-		IisBack               bool
-		IisBackIndex          int
-	}
-	tests := []struct {
-		name   string
-		fields fields
-		want   int
-		want1  bool
-	}{
-		// TODO: Add test cases.
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			rf := &Raft{
-				mu:                    tt.fields.mu,
-				peers:                 tt.fields.peers,
-				persister:             tt.fields.persister,
-				me:                    tt.fields.me,
-				dead:                  tt.fields.dead,
-				state:                 tt.fields.state,
-				currentTerm:           tt.fields.currentTerm,
-				votedFor:              tt.fields.votedFor,
-				log:                   tt.fields.log,
-				lastIncludeIndex:      tt.fields.lastIncludeIndex,
-				lastIncludeTerm:       tt.fields.lastIncludeTerm,
-				commitIndex:           tt.fields.commitIndex,
-				lastApplied:           tt.fields.lastApplied,
-				nextIndex:             tt.fields.nextIndex,
-				matchIndex:            tt.fields.matchIndex,
-				lastHearBeatTime:      tt.fields.lastHearBeatTime,
-				lastSendHeartbeatTime: tt.fields.lastSendHeartbeatTime,
-				leaderId:              tt.fields.leaderId,
-				applyCh:               tt.fields.applyCh,
-				applyChTerm:           tt.fields.applyChTerm,
-				SnapshotDate:          tt.fields.SnapshotDate,
-				IisBack:               tt.fields.IisBack,
-				IisBackIndex:          tt.fields.IisBackIndex,
-			}
-			got, got1 := rf.GetState()
-			if got != tt.want {
-				t.Errorf("Raft.GetState() got = %v, want %v", got, tt.want)
-			}
-			if got1 != tt.want1 {
-				t.Errorf("Raft.GetState() got1 = %v, want %v", got1, tt.want1)
-			}
-		})
-	}
-}
-
-func TestRaft_GetLeader(t *testing.T) {
-	type fields struct {
-		mu                    sync.Mutex
-		peers                 []*RaftEnd
-		persister             *Persister
-		me                    int
-		dead                  int32
-		state                 int32
-		currentTerm           int
-		votedFor              int
-		log                   []pb.LogType
-		lastIncludeIndex      int
-		lastIncludeTerm       int
-		commitIndex           int
-		lastApplied           int
-		nextIndex             []int
-		matchIndex            []int
-		lastHearBeatTime      time.Time
-		lastSendHeartbeatTime time.Time
-		leaderId              int
-		applyCh               chan ApplyMsg
-		applyChTerm           chan ApplyMsg
-		SnapshotDate          []byte
-		IisBack               bool
-		IisBackIndex          int
-	}
-	tests := []struct {
-		name   string
-		fields fields
-		want   bool
-	}{
-		// TODO: Add test cases.
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			rf := &Raft{
-				mu:                    tt.fields.mu,
-				peers:                 tt.fields.peers,
-				persister:             tt.fields.persister,
-				me:                    tt.fields.me,
-				dead:                  tt.fields.dead,
-				state:                 tt.fields.state,
-				currentTerm:           tt.fields.currentTerm,
-				votedFor:              tt.fields.votedFor,
-				log:                   tt.fields.log,
-				lastIncludeIndex:      tt.fields.lastIncludeIndex,
-				lastIncludeTerm:       tt.fields.lastIncludeTerm,
-				commitIndex:           tt.fields.commitIndex,
-				lastApplied:           tt.fields.lastApplied,
-				nextIndex:             tt.fields.nextIndex,
-				matchIndex:            tt.fields.matchIndex,
-				lastHearBeatTime:      tt.fields.lastHearBeatTime,
-				lastSendHeartbeatTime: tt.fields.lastSendHeartbeatTime,
-				leaderId:              tt.fields.leaderId,
-				applyCh:               tt.fields.applyCh,
-				applyChTerm:           tt.fields.applyChTerm,
-				SnapshotDate:          tt.fields.SnapshotDate,
-				IisBack:               tt.fields.IisBack,
-				IisBackIndex:          tt.fields.IisBackIndex,
-			}
-			if got := rf.GetLeader(); got != tt.want {
-				t.Errorf("Raft.GetLeader() = %v, want %v", got, tt.want)
-			}
-		})
-	}
-}
-
-func TestRaft_GetTerm(t *testing.T) {
-	type fields struct {
-		mu                    sync.Mutex
-		peers                 []*RaftEnd
-		persister             *Persister
-		me                    int
-		dead                  int32
-		state                 int32
-		currentTerm           int
-		votedFor              int
-		log                   []pb.LogType
-		lastIncludeIndex      int
-		lastIncludeTerm       int
-		commitIndex           int
-		lastApplied           int
-		nextIndex             []int
-		matchIndex            []int
-		lastHearBeatTime      time.Time
-		lastSendHeartbeatTime time.Time
-		leaderId              int
-		applyCh               chan ApplyMsg
-		applyChTerm           chan ApplyMsg
-		SnapshotDate          []byte
-		IisBack               bool
-		IisBackIndex          int
-	}
-	tests := []struct {
-		name   string
-		fields fields
-		want   int
-	}{
-		// TODO: Add test cases.
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			rf := &Raft{
-				mu:                    tt.fields.mu,
-				peers:                 tt.fields.peers,
-				persister:             tt.fields.persister,
-				me:                    tt.fields.me,
-				dead:                  tt.fields.dead,
-				state:                 tt.fields.state,
-				currentTerm:           tt.fields.currentTerm,
-				votedFor:              tt.fields.votedFor,
-				log:                   tt.fields.log,
-				lastIncludeIndex:      tt.fields.lastIncludeIndex,
-				lastIncludeTerm:       tt.fields.lastIncludeTerm,
-				commitIndex:           tt.fields.commitIndex,
-				lastApplied:           tt.fields.lastApplied,
-				nextIndex:             tt.fields.nextIndex,
-				matchIndex:            tt.fields.matchIndex,
-				lastHearBeatTime:      tt.fields.lastHearBeatTime,
-				lastSendHeartbeatTime: tt.fields.lastSendHeartbeatTime,
-				leaderId:              tt.fields.leaderId,
-				applyCh:               tt.fields.applyCh,
-				applyChTerm:           tt.fields.applyChTerm,
-				SnapshotDate:          tt.fields.SnapshotDate,
-				IisBack:               tt.fields.IisBack,
-				IisBackIndex:          tt.fields.IisBackIndex,
-			}
-			if got := rf.GetTerm(); got != tt.want {
-				t.Errorf("Raft.GetTerm() = %v, want %v", got, tt.want)
-			}
-		})
-	}
-}
-
-func TestRaft_persist(t *testing.T) {
-	type fields struct {
-		mu                    sync.Mutex
-		peers                 []*RaftEnd
-		persister             *Persister
-		me                    int
-		dead                  int32
-		state                 int32
-		currentTerm           int
-		votedFor              int
-		log                   []pb.LogType
-		lastIncludeIndex      int
-		lastIncludeTerm       int
-		commitIndex           int
-		lastApplied           int
-		nextIndex             []int
-		matchIndex            []int
-		lastHearBeatTime      time.Time
-		lastSendHeartbeatTime time.Time
-		leaderId              int
-		applyCh               chan ApplyMsg
-		applyChTerm           chan ApplyMsg
-		SnapshotDate          []byte
-		IisBack               bool
-		IisBackIndex          int
-	}
-	tests := []struct {
-		name   string
-		fields fields
-	}{
-		// TODO: Add test cases.
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			rf := &Raft{
-				mu:                    tt.fields.mu,
-				peers:                 tt.fields.peers,
-				persister:             tt.fields.persister,
-				me:                    tt.fields.me,
-				dead:                  tt.fields.dead,
-				state:                 tt.fields.state,
-				currentTerm:           tt.fields.currentTerm,
-				votedFor:              tt.fields.votedFor,
-				log:                   tt.fields.log,
-				lastIncludeIndex:      tt.fields.lastIncludeIndex,
-				lastIncludeTerm:       tt.fields.lastIncludeTerm,
-				commitIndex:           tt.fields.commitIndex,
-				lastApplied:           tt.fields.lastApplied,
-				nextIndex:             tt.fields.nextIndex,
-				matchIndex:            tt.fields.matchIndex,
-				lastHearBeatTime:      tt.fields.lastHearBeatTime,
-				lastSendHeartbeatTime: tt.fields.lastSendHeartbeatTime,
-				leaderId:              tt.fields.leaderId,
-				applyCh:               tt.fields.applyCh,
-				applyChTerm:           tt.fields.applyChTerm,
-				SnapshotDate:          tt.fields.SnapshotDate,
-				IisBack:               tt.fields.IisBack,
-				IisBackIndex:          tt.fields.IisBackIndex,
-			}
-			rf.persist()
-		})
-	}
-}
-
-func TestRaft_persistWithSnapshot(t *testing.T) {
-	type fields struct {
-		mu                    sync.Mutex
-		peers                 []*RaftEnd
-		persister             *Persister
-		me                    int
-		dead                  int32
-		state                 int32
-		currentTerm           int
-		votedFor              int
-		log                   []pb.LogType
-		lastIncludeIndex      int
-		lastIncludeTerm       int
-		commitIndex           int
-		lastApplied           int
-		nextIndex             []int
-		matchIndex            []int
-		lastHearBeatTime      time.Time
-		lastSendHeartbeatTime time.Time
-		leaderId              int
-		applyCh               chan ApplyMsg
-		applyChTerm           chan ApplyMsg
-		SnapshotDate          []byte
-		IisBack               bool
-		IisBackIndex          int
-	}
-	tests := []struct {
-		name   string
-		fields fields
-		want   []byte
-	}{
-		// TODO: Add test cases.
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			rf := &Raft{
-				mu:                    tt.fields.mu,
-				peers:                 tt.fields.peers,
-				persister:             tt.fields.persister,
-				me:                    tt.fields.me,
-				dead:                  tt.fields.dead,
-				state:                 tt.fields.state,
-				currentTerm:           tt.fields.currentTerm,
-				votedFor:              tt.fields.votedFor,
-				log:                   tt.fields.log,
-				lastIncludeIndex:      tt.fields.lastIncludeIndex,
-				lastIncludeTerm:       tt.fields.lastIncludeTerm,
-				commitIndex:           tt.fields.commitIndex,
-				lastApplied:           tt.fields.lastApplied,
-				nextIndex:             tt.fields.nextIndex,
-				matchIndex:            tt.fields.matchIndex,
-				lastHearBeatTime:      tt.fields.lastHearBeatTime,
-				lastSendHeartbeatTime: tt.fields.lastSendHeartbeatTime,
-				leaderId:              tt.fields.leaderId,
-				applyCh:               tt.fields.applyCh,
-				applyChTerm:           tt.fields.applyChTerm,
-				SnapshotDate:          tt.fields.SnapshotDate,
-				IisBack:               tt.fields.IisBack,
-				IisBackIndex:          tt.fields.IisBackIndex,
-			}
-			if got := rf.persistWithSnapshot(); !reflect.DeepEqual(got, tt.want) {
-				t.Errorf("Raft.persistWithSnapshot() = %v, want %v", got, tt.want)
-			}
-		})
-	}
-}
-
-func TestRaft_readPersist(t *testing.T) {
-	type fields struct {
-		mu                    sync.Mutex
-		peers                 []*RaftEnd
-		persister             *Persister
-		me                    int
-		dead                  int32
-		state                 int32
-		currentTerm           int
-		votedFor              int
-		log                   []pb.LogType
-		lastIncludeIndex      int
-		lastIncludeTerm       int
-		commitIndex           int
-		lastApplied           int
-		nextIndex             []int
-		matchIndex            []int
-		lastHearBeatTime      time.Time
-		lastSendHeartbeatTime time.Time
-		leaderId              int
-		applyCh               chan ApplyMsg
-		applyChTerm           chan ApplyMsg
-		SnapshotDate          []byte
-		IisBack               bool
-		IisBackIndex          int
-	}
-	type args struct {
-		data []byte
-	}
-	tests := []struct {
-		name   string
-		fields fields
-		args   args
-	}{
-		// TODO: Add test cases.
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			rf := &Raft{
-				mu:                    tt.fields.mu,
-				peers:                 tt.fields.peers,
-				persister:             tt.fields.persister,
-				me:                    tt.fields.me,
-				dead:                  tt.fields.dead,
-				state:                 tt.fields.state,
-				currentTerm:           tt.fields.currentTerm,
-				votedFor:              tt.fields.votedFor,
-				log:                   tt.fields.log,
-				lastIncludeIndex:      tt.fields.lastIncludeIndex,
-				lastIncludeTerm:       tt.fields.lastIncludeTerm,
-				commitIndex:           tt.fields.commitIndex,
-				lastApplied:           tt.fields.lastApplied,
-				nextIndex:             tt.fields.nextIndex,
-				matchIndex:            tt.fields.matchIndex,
-				lastHearBeatTime:      tt.fields.lastHearBeatTime,
-				lastSendHeartbeatTime: tt.fields.lastSendHeartbeatTime,
-				leaderId:              tt.fields.leaderId,
-				applyCh:               tt.fields.applyCh,
-				applyChTerm:           tt.fields.applyChTerm,
-				SnapshotDate:          tt.fields.SnapshotDate,
-				IisBack:               tt.fields.IisBack,
-				IisBackIndex:          tt.fields.IisBackIndex,
-			}
-			rf.readPersist(tt.args.data)
-		})
-	}
-}
-
-func TestRaft_CopyEntries(t *testing.T) {
-	type fields struct {
-		mu                    sync.Mutex
-		peers                 []*RaftEnd
-		persister             *Persister
-		me                    int
-		dead                  int32
-		state                 int32
-		currentTerm           int
-		votedFor              int
-		log                   []pb.LogType
-		lastIncludeIndex      int
-		lastIncludeTerm       int
-		commitIndex           int
-		lastApplied           int
-		nextIndex             []int
-		matchIndex            []int
-		lastHearBeatTime      time.Time
-		lastSendHeartbeatTime time.Time
-		leaderId              int
-		applyCh               chan ApplyMsg
-		applyChTerm           chan ApplyMsg
-		SnapshotDate          []byte
-		IisBack               bool
-		IisBackIndex          int
-	}
-	type args struct {
-		args *pb.AppendEntriesArgs
-	}
-	tests := []struct {
-		name   string
-		fields fields
-		args   args
-	}{
-		// TODO: Add test cases.
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			rf := &Raft{
-				mu:                    tt.fields.mu,
-				peers:                 tt.fields.peers,
-				persister:             tt.fields.persister,
-				me:                    tt.fields.me,
-				dead:                  tt.fields.dead,
-				state:                 tt.fields.state,
-				currentTerm:           tt.fields.currentTerm,
-				votedFor:              tt.fields.votedFor,
-				log:                   tt.fields.log,
-				lastIncludeIndex:      tt.fields.lastIncludeIndex,
-				lastIncludeTerm:       tt.fields.lastIncludeTerm,
-				commitIndex:           tt.fields.commitIndex,
-				lastApplied:           tt.fields.lastApplied,
-				nextIndex:             tt.fields.nextIndex,
-				matchIndex:            tt.fields.matchIndex,
-				lastHearBeatTime:      tt.fields.lastHearBeatTime,
-				lastSendHeartbeatTime: tt.fields.lastSendHeartbeatTime,
-				leaderId:              tt.fields.leaderId,
-				applyCh:               tt.fields.applyCh,
-				applyChTerm:           tt.fields.applyChTerm,
-				SnapshotDate:          tt.fields.SnapshotDate,
-				IisBack:               tt.fields.IisBack,
-				IisBackIndex:          tt.fields.IisBackIndex,
-			}
-			rf.CopyEntries(tt.args.args)
-		})
-	}
-}
-
-func TestRaft_RequestVote(t *testing.T) {
-	type fields struct {
-		mu                    sync.Mutex
-		peers                 []*RaftEnd
-		persister             *Persister
-		me                    int
-		dead                  int32
-		state                 int32
-		currentTerm           int
-		votedFor              int
-		log                   []pb.LogType
-		lastIncludeIndex      int
-		lastIncludeTerm       int
-		commitIndex           int
-		lastApplied           int
-		nextIndex             []int
-		matchIndex            []int
-		lastHearBeatTime      time.Time
-		lastSendHeartbeatTime time.Time
-		leaderId              int
-		applyCh               chan ApplyMsg
-		applyChTerm           chan ApplyMsg
-		SnapshotDate          []byte
-		IisBack               bool
-		IisBackIndex          int
-	}
-	type args struct {
-		in0  context.Context
-		args *pb.RequestVoteArgs
-	}
-	tests := []struct {
-		name      string
-		fields    fields
-		args      args
-		wantReply *pb.RequestVoteReply
-		wantErr   bool
-	}{
-		// TODO: Add test cases.
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			rf := &Raft{
-				mu:                    tt.fields.mu,
-				peers:                 tt.fields.peers,
-				persister:             tt.fields.persister,
-				me:                    tt.fields.me,
-				dead:                  tt.fields.dead,
-				state:                 tt.fields.state,
-				currentTerm:           tt.fields.currentTerm,
-				votedFor:              tt.fields.votedFor,
-				log:                   tt.fields.log,
-				lastIncludeIndex:      tt.fields.lastIncludeIndex,
-				lastIncludeTerm:       tt.fields.lastIncludeTerm,
-				commitIndex:           tt.fields.commitIndex,
-				lastApplied:           tt.fields.lastApplied,
-				nextIndex:             tt.fields.nextIndex,
-				matchIndex:            tt.fields.matchIndex,
-				lastHearBeatTime:      tt.fields.lastHearBeatTime,
-				lastSendHeartbeatTime: tt.fields.lastSendHeartbeatTime,
-				leaderId:              tt.fields.leaderId,
-				applyCh:               tt.fields.applyCh,
-				applyChTerm:           tt.fields.applyChTerm,
-				SnapshotDate:          tt.fields.SnapshotDate,
-				IisBack:               tt.fields.IisBack,
-				IisBackIndex:          tt.fields.IisBackIndex,
-			}
-			gotReply, err := rf.RequestVote(tt.args.in0, tt.args.args)
-			if (err != nil) != tt.wantErr {
-				t.Errorf("Raft.RequestVote() error = %v, wantErr %v", err, tt.wantErr)
+			select {
+			case <-h.done:
 				return
+			case <-time.After(time.Duration(1000+rand.Intn(1000)) * time.Millisecond):
+				h.t.Logf("Nemesis: Restarting node %d", nodeId)
+				h.StartNode(nodeId)
 			}
-			if !reflect.DeepEqual(gotReply, tt.wantReply) {
-				t.Errorf("Raft.RequestVote() = %v, want %v", gotReply, tt.wantReply)
-			}
-		})
+		}
 	}
 }
 
-func TestRaft_AppendEntries(t *testing.T) {
-	type fields struct {
-		mu                    sync.Mutex
-		peers                 []*RaftEnd
-		persister             *Persister
-		me                    int
-		dead                  int32
-		state                 int32
-		currentTerm           int
-		votedFor              int
-		log                   []pb.LogType
-		lastIncludeIndex      int
-		lastIncludeTerm       int
-		commitIndex           int
-		lastApplied           int
-		nextIndex             []int
-		matchIndex            []int
-		lastHearBeatTime      time.Time
-		lastSendHeartbeatTime time.Time
-		leaderId              int
-		applyCh               chan ApplyMsg
-		applyChTerm           chan ApplyMsg
-		SnapshotDate          []byte
-		IisBack               bool
-		IisBackIndex          int
-	}
-	type args struct {
-		in0  context.Context
-		args *pb.AppendEntriesArgs
-	}
-	tests := []struct {
-		name      string
-		fields    fields
-		args      args
-		wantReply *pb.AppendEntriesReply
-		wantErr   bool
-	}{
-		// TODO: Add test cases.
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			rf := &Raft{
-				mu:                    tt.fields.mu,
-				peers:                 tt.fields.peers,
-				persister:             tt.fields.persister,
-				me:                    tt.fields.me,
-				dead:                  tt.fields.dead,
-				state:                 tt.fields.state,
-				currentTerm:           tt.fields.currentTerm,
-				votedFor:              tt.fields.votedFor,
-				log:                   tt.fields.log,
-				lastIncludeIndex:      tt.fields.lastIncludeIndex,
-				lastIncludeTerm:       tt.fields.lastIncludeTerm,
-				commitIndex:           tt.fields.commitIndex,
-				lastApplied:           tt.fields.lastApplied,
-				nextIndex:             tt.fields.nextIndex,
-				matchIndex:            tt.fields.matchIndex,
-				lastHearBeatTime:      tt.fields.lastHearBeatTime,
-				lastSendHeartbeatTime: tt.fields.lastSendHeartbeatTime,
-				leaderId:              tt.fields.leaderId,
-				applyCh:               tt.fields.applyCh,
-				applyChTerm:           tt.fields.applyChTerm,
-				SnapshotDate:          tt.fields.SnapshotDate,
-				IisBack:               tt.fields.IisBack,
-				IisBackIndex:          tt.fields.IisBackIndex,
+// CheckConsistency verifies the results after the test.
+func (h *JepsenHarness) CheckConsistency(key string) {
+	h.t.Logf("--- Starting Consistency Check ---")
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	// 1. Check that all live nodes have the same state
+	var finalState string
+	var firstNodeId = -1
+	for i := 0; i < h.n; i++ {
+		if h.nodeStatus[i] {
+			if firstNodeId == -1 {
+				firstNodeId = i
+				finalState = h.kvStores[i][key]
+			} else {
+				if h.kvStores[i][key] != finalState {
+					h.t.Errorf("Inconsistency detected! Node %d state differs from Node %d.\nNode %d: %s\nNode %d: %s",
+						i, firstNodeId, i, h.kvStores[i][key], firstNodeId, finalState)
+				}
 			}
-			gotReply, err := rf.AppendEntries(tt.args.in0, tt.args.args)
-			if (err != nil) != tt.wantErr {
-				t.Errorf("Raft.AppendEntries() error = %v, wantErr %v", err, tt.wantErr)
-				return
-			}
-			if !reflect.DeepEqual(gotReply, tt.wantReply) {
-				t.Errorf("Raft.AppendEntries() = %v, want %v", gotReply, tt.wantReply)
-			}
-		})
+		}
+	}
+	if firstNodeId == -1 {
+		h.t.Log("All nodes were dead at the end. No state to compare.")
+		return
+	}
+	h.t.Logf("Final consistent state on live nodes: %s", finalState)
+
+	// 2. Check for lost acknowledged writes
+	h.historyMu.Lock()
+	defer h.historyMu.Unlock()
+
+	acknowledgedWrites := make(map[string]bool)
+	for _, entry := range h.history {
+		if entry.Success && entry.Op.Op == "Append" {
+			acknowledgedWrites[entry.Op.Value] = true
+		}
+	}
+
+	finalParts := strings.Split(strings.TrimSuffix(finalState, ";"), ";")
+	finalStateMap := make(map[string]bool)
+	for _, part := range finalParts {
+		if part != "" {
+			finalStateMap[part] = true
+		}
+	}
+
+	lostWrites := 0
+	for value := range acknowledgedWrites {
+		if !finalStateMap[value] {
+			h.t.Errorf("LOST WRITE DETECTED: Operation %s was acknowledged but is not in the final state.", value)
+			lostWrites++
+		}
+	}
+
+	if lostWrites == 0 {
+		h.t.Logf("PASSED: No lost acknowledged writes. %d successful writes verified.", len(acknowledgedWrites))
+	} else {
+		h.t.Errorf("FAILED: Detected %d lost writes.", lostWrites)
 	}
 }
 
-func TestRaft_SnapshotInstall(t *testing.T) {
-	type fields struct {
-		mu                    sync.Mutex
-		peers                 []*RaftEnd
-		persister             *Persister
-		me                    int
-		dead                  int32
-		state                 int32
-		currentTerm           int
-		votedFor              int
-		log                   []pb.LogType
-		lastIncludeIndex      int
-		lastIncludeTerm       int
-		commitIndex           int
-		lastApplied           int
-		nextIndex             []int
-		matchIndex            []int
-		lastHearBeatTime      time.Time
-		lastSendHeartbeatTime time.Time
-		leaderId              int
-		applyCh               chan ApplyMsg
-		applyChTerm           chan ApplyMsg
-		SnapshotDate          []byte
-		IisBack               bool
-		IisBackIndex          int
-	}
-	type args struct {
-		in0  context.Context
-		args *pb.SnapshotInstallArgs
-	}
-	tests := []struct {
-		name      string
-		fields    fields
-		args      args
-		wantReply *pb.SnapshotInstallReply
-		wantErr   bool
-	}{
-		// TODO: Add test cases.
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			rf := &Raft{
-				mu:                    tt.fields.mu,
-				peers:                 tt.fields.peers,
-				persister:             tt.fields.persister,
-				me:                    tt.fields.me,
-				dead:                  tt.fields.dead,
-				state:                 tt.fields.state,
-				currentTerm:           tt.fields.currentTerm,
-				votedFor:              tt.fields.votedFor,
-				log:                   tt.fields.log,
-				lastIncludeIndex:      tt.fields.lastIncludeIndex,
-				lastIncludeTerm:       tt.fields.lastIncludeTerm,
-				commitIndex:           tt.fields.commitIndex,
-				lastApplied:           tt.fields.lastApplied,
-				nextIndex:             tt.fields.nextIndex,
-				matchIndex:            tt.fields.matchIndex,
-				lastHearBeatTime:      tt.fields.lastHearBeatTime,
-				lastSendHeartbeatTime: tt.fields.lastSendHeartbeatTime,
-				leaderId:              tt.fields.leaderId,
-				applyCh:               tt.fields.applyCh,
-				applyChTerm:           tt.fields.applyChTerm,
-				SnapshotDate:          tt.fields.SnapshotDate,
-				IisBack:               tt.fields.IisBack,
-				IisBackIndex:          tt.fields.IisBackIndex,
-			}
-			gotReply, err := rf.SnapshotInstall(tt.args.in0, tt.args.args)
-			if (err != nil) != tt.wantErr {
-				t.Errorf("Raft.SnapshotInstall() error = %v, wantErr %v", err, tt.wantErr)
-				return
-			}
-			if !reflect.DeepEqual(gotReply, tt.wantReply) {
-				t.Errorf("Raft.SnapshotInstall() = %v, want %v", gotReply, tt.wantReply)
-			}
-		})
-	}
-}
+// TestJepsenStyleCrashTolerance is the main entry point for the Jepsen-style test.
+func TestJepsenStyleCrashTolerance(t *testing.T) {
+	// Set a timeout for the entire test to prevent it from running forever
+	testTimeout := time.After(30 * time.Second)
+	done := make(chan bool)
 
-func TestRaft_installSnapshotToApplication(t *testing.T) {
-	type fields struct {
-		mu                    sync.Mutex
-		peers                 []*RaftEnd
-		persister             *Persister
-		me                    int
-		dead                  int32
-		state                 int32
-		currentTerm           int
-		votedFor              int
-		log                   []pb.LogType
-		lastIncludeIndex      int
-		lastIncludeTerm       int
-		commitIndex           int
-		lastApplied           int
-		nextIndex             []int
-		matchIndex            []int
-		lastHearBeatTime      time.Time
-		lastSendHeartbeatTime time.Time
-		leaderId              int
-		applyCh               chan ApplyMsg
-		applyChTerm           chan ApplyMsg
-		SnapshotDate          []byte
-		IisBack               bool
-		IisBackIndex          int
-	}
-	tests := []struct {
-		name   string
-		fields fields
-	}{
-		// TODO: Add test cases.
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			rf := &Raft{
-				mu:                    tt.fields.mu,
-				peers:                 tt.fields.peers,
-				persister:             tt.fields.persister,
-				me:                    tt.fields.me,
-				dead:                  tt.fields.dead,
-				state:                 tt.fields.state,
-				currentTerm:           tt.fields.currentTerm,
-				votedFor:              tt.fields.votedFor,
-				log:                   tt.fields.log,
-				lastIncludeIndex:      tt.fields.lastIncludeIndex,
-				lastIncludeTerm:       tt.fields.lastIncludeTerm,
-				commitIndex:           tt.fields.commitIndex,
-				lastApplied:           tt.fields.lastApplied,
-				nextIndex:             tt.fields.nextIndex,
-				matchIndex:            tt.fields.matchIndex,
-				lastHearBeatTime:      tt.fields.lastHearBeatTime,
-				lastSendHeartbeatTime: tt.fields.lastSendHeartbeatTime,
-				leaderId:              tt.fields.leaderId,
-				applyCh:               tt.fields.applyCh,
-				applyChTerm:           tt.fields.applyChTerm,
-				SnapshotDate:          tt.fields.SnapshotDate,
-				IisBack:               tt.fields.IisBack,
-				IisBackIndex:          tt.fields.IisBackIndex,
-			}
-			rf.installSnapshotToApplication()
-		})
-	}
-}
+	go func() {
+		h := NewJepsenHarness(t, 5)
+		h.StartCluster()
 
-func TestRaft_sendInstallSnapshot(t *testing.T) {
-	type fields struct {
-		mu                    sync.Mutex
-		peers                 []*RaftEnd
-		persister             *Persister
-		me                    int
-		dead                  int32
-		state                 int32
-		currentTerm           int
-		votedFor              int
-		log                   []pb.LogType
-		lastIncludeIndex      int
-		lastIncludeTerm       int
-		commitIndex           int
-		lastApplied           int
-		nextIndex             []int
-		matchIndex            []int
-		lastHearBeatTime      time.Time
-		lastSendHeartbeatTime time.Time
-		leaderId              int
-		applyCh               chan ApplyMsg
-		applyChTerm           chan ApplyMsg
-		SnapshotDate          []byte
-		IisBack               bool
-		IisBackIndex          int
-	}
-	type args struct {
-		server int
-		args   *pb.SnapshotInstallArgs
-	}
-	tests := []struct {
-		name      string
-		fields    fields
-		args      args
-		wantReply *pb.SnapshotInstallReply
-		wantOk    bool
-	}{
-		// TODO: Add test cases.
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			rf := &Raft{
-				mu:                    tt.fields.mu,
-				peers:                 tt.fields.peers,
-				persister:             tt.fields.persister,
-				me:                    tt.fields.me,
-				dead:                  tt.fields.dead,
-				state:                 tt.fields.state,
-				currentTerm:           tt.fields.currentTerm,
-				votedFor:              tt.fields.votedFor,
-				log:                   tt.fields.log,
-				lastIncludeIndex:      tt.fields.lastIncludeIndex,
-				lastIncludeTerm:       tt.fields.lastIncludeTerm,
-				commitIndex:           tt.fields.commitIndex,
-				lastApplied:           tt.fields.lastApplied,
-				nextIndex:             tt.fields.nextIndex,
-				matchIndex:            tt.fields.matchIndex,
-				lastHearBeatTime:      tt.fields.lastHearBeatTime,
-				lastSendHeartbeatTime: tt.fields.lastSendHeartbeatTime,
-				leaderId:              tt.fields.leaderId,
-				applyCh:               tt.fields.applyCh,
-				applyChTerm:           tt.fields.applyChTerm,
-				SnapshotDate:          tt.fields.SnapshotDate,
-				IisBack:               tt.fields.IisBack,
-				IisBackIndex:          tt.fields.IisBackIndex,
-			}
-			gotReply, gotOk := rf.sendInstallSnapshot(tt.args.server, tt.args.args)
-			if !reflect.DeepEqual(gotReply, tt.wantReply) {
-				t.Errorf("Raft.sendInstallSnapshot() gotReply = %v, want %v", gotReply, tt.wantReply)
-			}
-			if gotOk != tt.wantOk {
-				t.Errorf("Raft.sendInstallSnapshot() gotOk = %v, want %v", gotOk, tt.wantOk)
-			}
-		})
-	}
-}
+		// Start a client and the nemesis
+		h.wg.Add(1)
+		go h.ClientLoop(1, "testKey")
+		h.wg.Add(1)
+		go h.NemesisLoop()
 
-func TestRaft_Snapshot(t *testing.T) {
-	type fields struct {
-		mu                    sync.Mutex
-		peers                 []*RaftEnd
-		persister             *Persister
-		me                    int
-		dead                  int32
-		state                 int32
-		currentTerm           int
-		votedFor              int
-		log                   []pb.LogType
-		lastIncludeIndex      int
-		lastIncludeTerm       int
-		commitIndex           int
-		lastApplied           int
-		nextIndex             []int
-		matchIndex            []int
-		lastHearBeatTime      time.Time
-		lastSendHeartbeatTime time.Time
-		leaderId              int
-		applyCh               chan ApplyMsg
-		applyChTerm           chan ApplyMsg
-		SnapshotDate          []byte
-		IisBack               bool
-		IisBackIndex          int
-	}
-	type args struct {
-		index    int
-		snapshot []byte
-	}
-	tests := []struct {
-		name   string
-		fields fields
-		args   args
-	}{
-		// TODO: Add test cases.
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			rf := &Raft{
-				mu:                    tt.fields.mu,
-				peers:                 tt.fields.peers,
-				persister:             tt.fields.persister,
-				me:                    tt.fields.me,
-				dead:                  tt.fields.dead,
-				state:                 tt.fields.state,
-				currentTerm:           tt.fields.currentTerm,
-				votedFor:              tt.fields.votedFor,
-				log:                   tt.fields.log,
-				lastIncludeIndex:      tt.fields.lastIncludeIndex,
-				lastIncludeTerm:       tt.fields.lastIncludeTerm,
-				commitIndex:           tt.fields.commitIndex,
-				lastApplied:           tt.fields.lastApplied,
-				nextIndex:             tt.fields.nextIndex,
-				matchIndex:            tt.fields.matchIndex,
-				lastHearBeatTime:      tt.fields.lastHearBeatTime,
-				lastSendHeartbeatTime: tt.fields.lastSendHeartbeatTime,
-				leaderId:              tt.fields.leaderId,
-				applyCh:               tt.fields.applyCh,
-				applyChTerm:           tt.fields.applyChTerm,
-				SnapshotDate:          tt.fields.SnapshotDate,
-				IisBack:               tt.fields.IisBack,
-				IisBackIndex:          tt.fields.IisBackIndex,
-			}
-			rf.Snapshot(tt.args.index, tt.args.snapshot)
-		})
-	}
-}
+		// Let the test run for a while
+		time.Sleep(25 * time.Second)
 
-func TestRaft_updateCommitIndex(t *testing.T) {
-	type fields struct {
-		mu                    sync.Mutex
-		peers                 []*RaftEnd
-		persister             *Persister
-		me                    int
-		dead                  int32
-		state                 int32
-		currentTerm           int
-		votedFor              int
-		log                   []pb.LogType
-		lastIncludeIndex      int
-		lastIncludeTerm       int
-		commitIndex           int
-		lastApplied           int
-		nextIndex             []int
-		matchIndex            []int
-		lastHearBeatTime      time.Time
-		lastSendHeartbeatTime time.Time
-		leaderId              int
-		applyCh               chan ApplyMsg
-		applyChTerm           chan ApplyMsg
-		SnapshotDate          []byte
-		IisBack               bool
-		IisBackIndex          int
-	}
-	tests := []struct {
-		name   string
-		fields fields
-	}{
-		// TODO: Add test cases.
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			rf := &Raft{
-				mu:                    tt.fields.mu,
-				peers:                 tt.fields.peers,
-				persister:             tt.fields.persister,
-				me:                    tt.fields.me,
-				dead:                  tt.fields.dead,
-				state:                 tt.fields.state,
-				currentTerm:           tt.fields.currentTerm,
-				votedFor:              tt.fields.votedFor,
-				log:                   tt.fields.log,
-				lastIncludeIndex:      tt.fields.lastIncludeIndex,
-				lastIncludeTerm:       tt.fields.lastIncludeTerm,
-				commitIndex:           tt.fields.commitIndex,
-				lastApplied:           tt.fields.lastApplied,
-				nextIndex:             tt.fields.nextIndex,
-				matchIndex:            tt.fields.matchIndex,
-				lastHearBeatTime:      tt.fields.lastHearBeatTime,
-				lastSendHeartbeatTime: tt.fields.lastSendHeartbeatTime,
-				leaderId:              tt.fields.leaderId,
-				applyCh:               tt.fields.applyCh,
-				applyChTerm:           tt.fields.applyChTerm,
-				SnapshotDate:          tt.fields.SnapshotDate,
-				IisBack:               tt.fields.IisBack,
-				IisBackIndex:          tt.fields.IisBackIndex,
-			}
-			rf.updateCommitIndex()
-		})
-	}
-}
+		h.t.Log("--- Test duration finished. Shutting down. ---")
+		h.Shutdown()
+		h.CheckConsistency("testKey")
+		done <- true
+	}()
 
-func TestRaft_undateLastApplied(t *testing.T) {
-	type fields struct {
-		mu                    sync.Mutex
-		peers                 []*RaftEnd
-		persister             *Persister
-		me                    int
-		dead                  int32
-		state                 int32
-		currentTerm           int
-		votedFor              int
-		log                   []pb.LogType
-		lastIncludeIndex      int
-		lastIncludeTerm       int
-		commitIndex           int
-		lastApplied           int
-		nextIndex             []int
-		matchIndex            []int
-		lastHearBeatTime      time.Time
-		lastSendHeartbeatTime time.Time
-		leaderId              int
-		applyCh               chan ApplyMsg
-		applyChTerm           chan ApplyMsg
-		SnapshotDate          []byte
-		IisBack               bool
-		IisBackIndex          int
-	}
-	tests := []struct {
-		name   string
-		fields fields
-	}{
-		// TODO: Add test cases.
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			rf := &Raft{
-				mu:                    tt.fields.mu,
-				peers:                 tt.fields.peers,
-				persister:             tt.fields.persister,
-				me:                    tt.fields.me,
-				dead:                  tt.fields.dead,
-				state:                 tt.fields.state,
-				currentTerm:           tt.fields.currentTerm,
-				votedFor:              tt.fields.votedFor,
-				log:                   tt.fields.log,
-				lastIncludeIndex:      tt.fields.lastIncludeIndex,
-				lastIncludeTerm:       tt.fields.lastIncludeTerm,
-				commitIndex:           tt.fields.commitIndex,
-				lastApplied:           tt.fields.lastApplied,
-				nextIndex:             tt.fields.nextIndex,
-				matchIndex:            tt.fields.matchIndex,
-				lastHearBeatTime:      tt.fields.lastHearBeatTime,
-				lastSendHeartbeatTime: tt.fields.lastSendHeartbeatTime,
-				leaderId:              tt.fields.leaderId,
-				applyCh:               tt.fields.applyCh,
-				applyChTerm:           tt.fields.applyChTerm,
-				SnapshotDate:          tt.fields.SnapshotDate,
-				IisBack:               tt.fields.IisBack,
-				IisBackIndex:          tt.fields.IisBackIndex,
-			}
-			rf.undateLastApplied()
-		})
-	}
-}
-
-func TestRaft_Start(t *testing.T) {
-	type fields struct {
-		mu                    sync.Mutex
-		peers                 []*RaftEnd
-		persister             *Persister
-		me                    int
-		dead                  int32
-		state                 int32
-		currentTerm           int
-		votedFor              int
-		log                   []pb.LogType
-		lastIncludeIndex      int
-		lastIncludeTerm       int
-		commitIndex           int
-		lastApplied           int
-		nextIndex             []int
-		matchIndex            []int
-		lastHearBeatTime      time.Time
-		lastSendHeartbeatTime time.Time
-		leaderId              int
-		applyCh               chan ApplyMsg
-		applyChTerm           chan ApplyMsg
-		SnapshotDate          []byte
-		IisBack               bool
-		IisBackIndex          int
-	}
-	type args struct {
-		command []byte
-	}
-	tests := []struct {
-		name   string
-		fields fields
-		args   args
-		want   int
-		want1  int
-		want2  bool
-	}{
-		// TODO: Add test cases.
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			rf := &Raft{
-				mu:                    tt.fields.mu,
-				peers:                 tt.fields.peers,
-				persister:             tt.fields.persister,
-				me:                    tt.fields.me,
-				dead:                  tt.fields.dead,
-				state:                 tt.fields.state,
-				currentTerm:           tt.fields.currentTerm,
-				votedFor:              tt.fields.votedFor,
-				log:                   tt.fields.log,
-				lastIncludeIndex:      tt.fields.lastIncludeIndex,
-				lastIncludeTerm:       tt.fields.lastIncludeTerm,
-				commitIndex:           tt.fields.commitIndex,
-				lastApplied:           tt.fields.lastApplied,
-				nextIndex:             tt.fields.nextIndex,
-				matchIndex:            tt.fields.matchIndex,
-				lastHearBeatTime:      tt.fields.lastHearBeatTime,
-				lastSendHeartbeatTime: tt.fields.lastSendHeartbeatTime,
-				leaderId:              tt.fields.leaderId,
-				applyCh:               tt.fields.applyCh,
-				applyChTerm:           tt.fields.applyChTerm,
-				SnapshotDate:          tt.fields.SnapshotDate,
-				IisBack:               tt.fields.IisBack,
-				IisBackIndex:          tt.fields.IisBackIndex,
-			}
-			got, got1, got2 := rf.Start(tt.args.command)
-			if got != tt.want {
-				t.Errorf("Raft.Start() got = %v, want %v", got, tt.want)
-			}
-			if got1 != tt.want1 {
-				t.Errorf("Raft.Start() got1 = %v, want %v", got1, tt.want1)
-			}
-			if got2 != tt.want2 {
-				t.Errorf("Raft.Start() got2 = %v, want %v", got2, tt.want2)
-			}
-		})
-	}
-}
-
-func TestRaft_Kill(t *testing.T) {
-	type fields struct {
-		mu                    sync.Mutex
-		peers                 []*RaftEnd
-		persister             *Persister
-		me                    int
-		dead                  int32
-		state                 int32
-		currentTerm           int
-		votedFor              int
-		log                   []pb.LogType
-		lastIncludeIndex      int
-		lastIncludeTerm       int
-		commitIndex           int
-		lastApplied           int
-		nextIndex             []int
-		matchIndex            []int
-		lastHearBeatTime      time.Time
-		lastSendHeartbeatTime time.Time
-		leaderId              int
-		applyCh               chan ApplyMsg
-		applyChTerm           chan ApplyMsg
-		SnapshotDate          []byte
-		IisBack               bool
-		IisBackIndex          int
-	}
-	tests := []struct {
-		name   string
-		fields fields
-	}{
-		// TODO: Add test cases.
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			rf := &Raft{
-				mu:                    tt.fields.mu,
-				peers:                 tt.fields.peers,
-				persister:             tt.fields.persister,
-				me:                    tt.fields.me,
-				dead:                  tt.fields.dead,
-				state:                 tt.fields.state,
-				currentTerm:           tt.fields.currentTerm,
-				votedFor:              tt.fields.votedFor,
-				log:                   tt.fields.log,
-				lastIncludeIndex:      tt.fields.lastIncludeIndex,
-				lastIncludeTerm:       tt.fields.lastIncludeTerm,
-				commitIndex:           tt.fields.commitIndex,
-				lastApplied:           tt.fields.lastApplied,
-				nextIndex:             tt.fields.nextIndex,
-				matchIndex:            tt.fields.matchIndex,
-				lastHearBeatTime:      tt.fields.lastHearBeatTime,
-				lastSendHeartbeatTime: tt.fields.lastSendHeartbeatTime,
-				leaderId:              tt.fields.leaderId,
-				applyCh:               tt.fields.applyCh,
-				applyChTerm:           tt.fields.applyChTerm,
-				SnapshotDate:          tt.fields.SnapshotDate,
-				IisBack:               tt.fields.IisBack,
-				IisBackIndex:          tt.fields.IisBackIndex,
-			}
-			rf.Kill()
-		})
-	}
-}
-
-func TestRaft_killed(t *testing.T) {
-	type fields struct {
-		mu                    sync.Mutex
-		peers                 []*RaftEnd
-		persister             *Persister
-		me                    int
-		dead                  int32
-		state                 int32
-		currentTerm           int
-		votedFor              int
-		log                   []pb.LogType
-		lastIncludeIndex      int
-		lastIncludeTerm       int
-		commitIndex           int
-		lastApplied           int
-		nextIndex             []int
-		matchIndex            []int
-		lastHearBeatTime      time.Time
-		lastSendHeartbeatTime time.Time
-		leaderId              int
-		applyCh               chan ApplyMsg
-		applyChTerm           chan ApplyMsg
-		SnapshotDate          []byte
-		IisBack               bool
-		IisBackIndex          int
-	}
-	tests := []struct {
-		name   string
-		fields fields
-		want   bool
-	}{
-		// TODO: Add test cases.
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			rf := &Raft{
-				mu:                    tt.fields.mu,
-				peers:                 tt.fields.peers,
-				persister:             tt.fields.persister,
-				me:                    tt.fields.me,
-				dead:                  tt.fields.dead,
-				state:                 tt.fields.state,
-				currentTerm:           tt.fields.currentTerm,
-				votedFor:              tt.fields.votedFor,
-				log:                   tt.fields.log,
-				lastIncludeIndex:      tt.fields.lastIncludeIndex,
-				lastIncludeTerm:       tt.fields.lastIncludeTerm,
-				commitIndex:           tt.fields.commitIndex,
-				lastApplied:           tt.fields.lastApplied,
-				nextIndex:             tt.fields.nextIndex,
-				matchIndex:            tt.fields.matchIndex,
-				lastHearBeatTime:      tt.fields.lastHearBeatTime,
-				lastSendHeartbeatTime: tt.fields.lastSendHeartbeatTime,
-				leaderId:              tt.fields.leaderId,
-				applyCh:               tt.fields.applyCh,
-				applyChTerm:           tt.fields.applyChTerm,
-				SnapshotDate:          tt.fields.SnapshotDate,
-				IisBack:               tt.fields.IisBack,
-				IisBackIndex:          tt.fields.IisBackIndex,
-			}
-			if got := rf.killed(); got != tt.want {
-				t.Errorf("Raft.killed() = %v, want %v", got, tt.want)
-			}
-		})
-	}
-}
-
-func TestRaft_sendRequestVote2(t *testing.T) {
-	type fields struct {
-		mu                    sync.Mutex
-		peers                 []*RaftEnd
-		persister             *Persister
-		me                    int
-		dead                  int32
-		state                 int32
-		currentTerm           int
-		votedFor              int
-		log                   []pb.LogType
-		lastIncludeIndex      int
-		lastIncludeTerm       int
-		commitIndex           int
-		lastApplied           int
-		nextIndex             []int
-		matchIndex            []int
-		lastHearBeatTime      time.Time
-		lastSendHeartbeatTime time.Time
-		leaderId              int
-		applyCh               chan ApplyMsg
-		applyChTerm           chan ApplyMsg
-		SnapshotDate          []byte
-		IisBack               bool
-		IisBackIndex          int
-	}
-	type args struct {
-		server int
-		args   *pb.RequestVoteArgs
-	}
-	tests := []struct {
-		name      string
-		fields    fields
-		args      args
-		wantReply *pb.RequestVoteReply
-		wantOk    bool
-	}{
-		// TODO: Add test cases.
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			rf := &Raft{
-				mu:                    tt.fields.mu,
-				peers:                 tt.fields.peers,
-				persister:             tt.fields.persister,
-				me:                    tt.fields.me,
-				dead:                  tt.fields.dead,
-				state:                 tt.fields.state,
-				currentTerm:           tt.fields.currentTerm,
-				votedFor:              tt.fields.votedFor,
-				log:                   tt.fields.log,
-				lastIncludeIndex:      tt.fields.lastIncludeIndex,
-				lastIncludeTerm:       tt.fields.lastIncludeTerm,
-				commitIndex:           tt.fields.commitIndex,
-				lastApplied:           tt.fields.lastApplied,
-				nextIndex:             tt.fields.nextIndex,
-				matchIndex:            tt.fields.matchIndex,
-				lastHearBeatTime:      tt.fields.lastHearBeatTime,
-				lastSendHeartbeatTime: tt.fields.lastSendHeartbeatTime,
-				leaderId:              tt.fields.leaderId,
-				applyCh:               tt.fields.applyCh,
-				applyChTerm:           tt.fields.applyChTerm,
-				SnapshotDate:          tt.fields.SnapshotDate,
-				IisBack:               tt.fields.IisBack,
-				IisBackIndex:          tt.fields.IisBackIndex,
-			}
-			gotReply, gotOk := rf.sendRequestVote2(tt.args.server, tt.args.args)
-			if !reflect.DeepEqual(gotReply, tt.wantReply) {
-				t.Errorf("Raft.sendRequestVote2() gotReply = %v, want %v", gotReply, tt.wantReply)
-			}
-			if gotOk != tt.wantOk {
-				t.Errorf("Raft.sendRequestVote2() gotOk = %v, want %v", gotOk, tt.wantOk)
-			}
-		})
-	}
-}
-
-func TestRaft_electionLoop(t *testing.T) {
-	type fields struct {
-		mu                    sync.Mutex
-		peers                 []*RaftEnd
-		persister             *Persister
-		me                    int
-		dead                  int32
-		state                 int32
-		currentTerm           int
-		votedFor              int
-		log                   []pb.LogType
-		lastIncludeIndex      int
-		lastIncludeTerm       int
-		commitIndex           int
-		lastApplied           int
-		nextIndex             []int
-		matchIndex            []int
-		lastHearBeatTime      time.Time
-		lastSendHeartbeatTime time.Time
-		leaderId              int
-		applyCh               chan ApplyMsg
-		applyChTerm           chan ApplyMsg
-		SnapshotDate          []byte
-		IisBack               bool
-		IisBackIndex          int
-	}
-	tests := []struct {
-		name   string
-		fields fields
-	}{
-		// TODO: Add test cases.
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			rf := &Raft{
-				mu:                    tt.fields.mu,
-				peers:                 tt.fields.peers,
-				persister:             tt.fields.persister,
-				me:                    tt.fields.me,
-				dead:                  tt.fields.dead,
-				state:                 tt.fields.state,
-				currentTerm:           tt.fields.currentTerm,
-				votedFor:              tt.fields.votedFor,
-				log:                   tt.fields.log,
-				lastIncludeIndex:      tt.fields.lastIncludeIndex,
-				lastIncludeTerm:       tt.fields.lastIncludeTerm,
-				commitIndex:           tt.fields.commitIndex,
-				lastApplied:           tt.fields.lastApplied,
-				nextIndex:             tt.fields.nextIndex,
-				matchIndex:            tt.fields.matchIndex,
-				lastHearBeatTime:      tt.fields.lastHearBeatTime,
-				lastSendHeartbeatTime: tt.fields.lastSendHeartbeatTime,
-				leaderId:              tt.fields.leaderId,
-				applyCh:               tt.fields.applyCh,
-				applyChTerm:           tt.fields.applyChTerm,
-				SnapshotDate:          tt.fields.SnapshotDate,
-				IisBack:               tt.fields.IisBack,
-				IisBackIndex:          tt.fields.IisBackIndex,
-			}
-			rf.electionLoop()
-		})
-	}
-}
-
-func TestRaft_SendAppendEntriesToPeerId(t *testing.T) {
-	type fields struct {
-		mu                    sync.Mutex
-		peers                 []*RaftEnd
-		persister             *Persister
-		me                    int
-		dead                  int32
-		state                 int32
-		currentTerm           int
-		votedFor              int
-		log                   []pb.LogType
-		lastIncludeIndex      int
-		lastIncludeTerm       int
-		commitIndex           int
-		lastApplied           int
-		nextIndex             []int
-		matchIndex            []int
-		lastHearBeatTime      time.Time
-		lastSendHeartbeatTime time.Time
-		leaderId              int
-		applyCh               chan ApplyMsg
-		applyChTerm           chan ApplyMsg
-		SnapshotDate          []byte
-		IisBack               bool
-		IisBackIndex          int
-	}
-	type args struct {
-		server       int
-		applychreply *chan int
-	}
-	tests := []struct {
-		name   string
-		fields fields
-		args   args
-	}{
-		// TODO: Add test cases.
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			rf := &Raft{
-				mu:                    tt.fields.mu,
-				peers:                 tt.fields.peers,
-				persister:             tt.fields.persister,
-				me:                    tt.fields.me,
-				dead:                  tt.fields.dead,
-				state:                 tt.fields.state,
-				currentTerm:           tt.fields.currentTerm,
-				votedFor:              tt.fields.votedFor,
-				log:                   tt.fields.log,
-				lastIncludeIndex:      tt.fields.lastIncludeIndex,
-				lastIncludeTerm:       tt.fields.lastIncludeTerm,
-				commitIndex:           tt.fields.commitIndex,
-				lastApplied:           tt.fields.lastApplied,
-				nextIndex:             tt.fields.nextIndex,
-				matchIndex:            tt.fields.matchIndex,
-				lastHearBeatTime:      tt.fields.lastHearBeatTime,
-				lastSendHeartbeatTime: tt.fields.lastSendHeartbeatTime,
-				leaderId:              tt.fields.leaderId,
-				applyCh:               tt.fields.applyCh,
-				applyChTerm:           tt.fields.applyChTerm,
-				SnapshotDate:          tt.fields.SnapshotDate,
-				IisBack:               tt.fields.IisBack,
-				IisBackIndex:          tt.fields.IisBackIndex,
-			}
-			rf.SendAppendEntriesToPeerId(tt.args.server, tt.args.applychreply)
-		})
-	}
-}
-
-func TestRaft_appendEntriesLoop(t *testing.T) {
-	type fields struct {
-		mu                    sync.Mutex
-		peers                 []*RaftEnd
-		persister             *Persister
-		me                    int
-		dead                  int32
-		state                 int32
-		currentTerm           int
-		votedFor              int
-		log                   []pb.LogType
-		lastIncludeIndex      int
-		lastIncludeTerm       int
-		commitIndex           int
-		lastApplied           int
-		nextIndex             []int
-		matchIndex            []int
-		lastHearBeatTime      time.Time
-		lastSendHeartbeatTime time.Time
-		leaderId              int
-		applyCh               chan ApplyMsg
-		applyChTerm           chan ApplyMsg
-		SnapshotDate          []byte
-		IisBack               bool
-		IisBackIndex          int
-	}
-	tests := []struct {
-		name   string
-		fields fields
-	}{
-		// TODO: Add test cases.
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			rf := &Raft{
-				mu:                    tt.fields.mu,
-				peers:                 tt.fields.peers,
-				persister:             tt.fields.persister,
-				me:                    tt.fields.me,
-				dead:                  tt.fields.dead,
-				state:                 tt.fields.state,
-				currentTerm:           tt.fields.currentTerm,
-				votedFor:              tt.fields.votedFor,
-				log:                   tt.fields.log,
-				lastIncludeIndex:      tt.fields.lastIncludeIndex,
-				lastIncludeTerm:       tt.fields.lastIncludeTerm,
-				commitIndex:           tt.fields.commitIndex,
-				lastApplied:           tt.fields.lastApplied,
-				nextIndex:             tt.fields.nextIndex,
-				matchIndex:            tt.fields.matchIndex,
-				lastHearBeatTime:      tt.fields.lastHearBeatTime,
-				lastSendHeartbeatTime: tt.fields.lastSendHeartbeatTime,
-				leaderId:              tt.fields.leaderId,
-				applyCh:               tt.fields.applyCh,
-				applyChTerm:           tt.fields.applyChTerm,
-				SnapshotDate:          tt.fields.SnapshotDate,
-				IisBack:               tt.fields.IisBack,
-				IisBackIndex:          tt.fields.IisBackIndex,
-			}
-			rf.appendEntriesLoop()
-		})
-	}
-}
-
-func TestRaft_SendAppendEntriesToAll(t *testing.T) {
-	type fields struct {
-		mu                    sync.Mutex
-		peers                 []*RaftEnd
-		persister             *Persister
-		me                    int
-		dead                  int32
-		state                 int32
-		currentTerm           int
-		votedFor              int
-		log                   []pb.LogType
-		lastIncludeIndex      int
-		lastIncludeTerm       int
-		commitIndex           int
-		lastApplied           int
-		nextIndex             []int
-		matchIndex            []int
-		lastHearBeatTime      time.Time
-		lastSendHeartbeatTime time.Time
-		leaderId              int
-		applyCh               chan ApplyMsg
-		applyChTerm           chan ApplyMsg
-		SnapshotDate          []byte
-		IisBack               bool
-		IisBackIndex          int
-	}
-	tests := []struct {
-		name   string
-		fields fields
-	}{
-		// TODO: Add test cases.
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			rf := &Raft{
-				mu:                    tt.fields.mu,
-				peers:                 tt.fields.peers,
-				persister:             tt.fields.persister,
-				me:                    tt.fields.me,
-				dead:                  tt.fields.dead,
-				state:                 tt.fields.state,
-				currentTerm:           tt.fields.currentTerm,
-				votedFor:              tt.fields.votedFor,
-				log:                   tt.fields.log,
-				lastIncludeIndex:      tt.fields.lastIncludeIndex,
-				lastIncludeTerm:       tt.fields.lastIncludeTerm,
-				commitIndex:           tt.fields.commitIndex,
-				lastApplied:           tt.fields.lastApplied,
-				nextIndex:             tt.fields.nextIndex,
-				matchIndex:            tt.fields.matchIndex,
-				lastHearBeatTime:      tt.fields.lastHearBeatTime,
-				lastSendHeartbeatTime: tt.fields.lastSendHeartbeatTime,
-				leaderId:              tt.fields.leaderId,
-				applyCh:               tt.fields.applyCh,
-				applyChTerm:           tt.fields.applyChTerm,
-				SnapshotDate:          tt.fields.SnapshotDate,
-				IisBack:               tt.fields.IisBack,
-				IisBackIndex:          tt.fields.IisBackIndex,
-			}
-			rf.SendAppendEntriesToAll()
-		})
-	}
-}
-
-func TestRaft_SendOnlyAppendEntriesToAll(t *testing.T) {
-	type fields struct {
-		mu                    sync.Mutex
-		peers                 []*RaftEnd
-		persister             *Persister
-		me                    int
-		dead                  int32
-		state                 int32
-		currentTerm           int
-		votedFor              int
-		log                   []pb.LogType
-		lastIncludeIndex      int
-		lastIncludeTerm       int
-		commitIndex           int
-		lastApplied           int
-		nextIndex             []int
-		matchIndex            []int
-		lastHearBeatTime      time.Time
-		lastSendHeartbeatTime time.Time
-		leaderId              int
-		applyCh               chan ApplyMsg
-		applyChTerm           chan ApplyMsg
-		SnapshotDate          []byte
-		IisBack               bool
-		IisBackIndex          int
-	}
-	tests := []struct {
-		name   string
-		fields fields
-	}{
-		// TODO: Add test cases.
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			rf := &Raft{
-				mu:                    tt.fields.mu,
-				peers:                 tt.fields.peers,
-				persister:             tt.fields.persister,
-				me:                    tt.fields.me,
-				dead:                  tt.fields.dead,
-				state:                 tt.fields.state,
-				currentTerm:           tt.fields.currentTerm,
-				votedFor:              tt.fields.votedFor,
-				log:                   tt.fields.log,
-				lastIncludeIndex:      tt.fields.lastIncludeIndex,
-				lastIncludeTerm:       tt.fields.lastIncludeTerm,
-				commitIndex:           tt.fields.commitIndex,
-				lastApplied:           tt.fields.lastApplied,
-				nextIndex:             tt.fields.nextIndex,
-				matchIndex:            tt.fields.matchIndex,
-				lastHearBeatTime:      tt.fields.lastHearBeatTime,
-				lastSendHeartbeatTime: tt.fields.lastSendHeartbeatTime,
-				leaderId:              tt.fields.leaderId,
-				applyCh:               tt.fields.applyCh,
-				applyChTerm:           tt.fields.applyChTerm,
-				SnapshotDate:          tt.fields.SnapshotDate,
-				IisBack:               tt.fields.IisBack,
-				IisBackIndex:          tt.fields.IisBackIndex,
-			}
-			rf.SendOnlyAppendEntriesToAll()
-		})
-	}
-}
-
-func TestRaft_sendInstallSnapshotToPeerId(t *testing.T) {
-	type fields struct {
-		mu                    sync.Mutex
-		peers                 []*RaftEnd
-		persister             *Persister
-		me                    int
-		dead                  int32
-		state                 int32
-		currentTerm           int
-		votedFor              int
-		log                   []pb.LogType
-		lastIncludeIndex      int
-		lastIncludeTerm       int
-		commitIndex           int
-		lastApplied           int
-		nextIndex             []int
-		matchIndex            []int
-		lastHearBeatTime      time.Time
-		lastSendHeartbeatTime time.Time
-		leaderId              int
-		applyCh               chan ApplyMsg
-		applyChTerm           chan ApplyMsg
-		SnapshotDate          []byte
-		IisBack               bool
-		IisBackIndex          int
-	}
-	type args struct {
-		server int
-	}
-	tests := []struct {
-		name   string
-		fields fields
-		args   args
-	}{
-		// TODO: Add test cases.
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			rf := &Raft{
-				mu:                    tt.fields.mu,
-				peers:                 tt.fields.peers,
-				persister:             tt.fields.persister,
-				me:                    tt.fields.me,
-				dead:                  tt.fields.dead,
-				state:                 tt.fields.state,
-				currentTerm:           tt.fields.currentTerm,
-				votedFor:              tt.fields.votedFor,
-				log:                   tt.fields.log,
-				lastIncludeIndex:      tt.fields.lastIncludeIndex,
-				lastIncludeTerm:       tt.fields.lastIncludeTerm,
-				commitIndex:           tt.fields.commitIndex,
-				lastApplied:           tt.fields.lastApplied,
-				nextIndex:             tt.fields.nextIndex,
-				matchIndex:            tt.fields.matchIndex,
-				lastHearBeatTime:      tt.fields.lastHearBeatTime,
-				lastSendHeartbeatTime: tt.fields.lastSendHeartbeatTime,
-				leaderId:              tt.fields.leaderId,
-				applyCh:               tt.fields.applyCh,
-				applyChTerm:           tt.fields.applyChTerm,
-				SnapshotDate:          tt.fields.SnapshotDate,
-				IisBack:               tt.fields.IisBack,
-				IisBackIndex:          tt.fields.IisBackIndex,
-			}
-			rf.sendInstallSnapshotToPeerId(tt.args.server)
-		})
-	}
-}
-
-func TestRaft_IfNeedExceedLog(t *testing.T) {
-	type fields struct {
-		mu                    sync.Mutex
-		peers                 []*RaftEnd
-		persister             *Persister
-		me                    int
-		dead                  int32
-		state                 int32
-		currentTerm           int
-		votedFor              int
-		log                   []pb.LogType
-		lastIncludeIndex      int
-		lastIncludeTerm       int
-		commitIndex           int
-		lastApplied           int
-		nextIndex             []int
-		matchIndex            []int
-		lastHearBeatTime      time.Time
-		lastSendHeartbeatTime time.Time
-		leaderId              int
-		applyCh               chan ApplyMsg
-		applyChTerm           chan ApplyMsg
-		SnapshotDate          []byte
-		IisBack               bool
-		IisBackIndex          int
-	}
-	type args struct {
-		logSize int
-	}
-	tests := []struct {
-		name   string
-		fields fields
-		args   args
-		want   bool
-	}{
-		// TODO: Add test cases.
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			rf := &Raft{
-				mu:                    tt.fields.mu,
-				peers:                 tt.fields.peers,
-				persister:             tt.fields.persister,
-				me:                    tt.fields.me,
-				dead:                  tt.fields.dead,
-				state:                 tt.fields.state,
-				currentTerm:           tt.fields.currentTerm,
-				votedFor:              tt.fields.votedFor,
-				log:                   tt.fields.log,
-				lastIncludeIndex:      tt.fields.lastIncludeIndex,
-				lastIncludeTerm:       tt.fields.lastIncludeTerm,
-				commitIndex:           tt.fields.commitIndex,
-				lastApplied:           tt.fields.lastApplied,
-				nextIndex:             tt.fields.nextIndex,
-				matchIndex:            tt.fields.matchIndex,
-				lastHearBeatTime:      tt.fields.lastHearBeatTime,
-				lastSendHeartbeatTime: tt.fields.lastSendHeartbeatTime,
-				leaderId:              tt.fields.leaderId,
-				applyCh:               tt.fields.applyCh,
-				applyChTerm:           tt.fields.applyChTerm,
-				SnapshotDate:          tt.fields.SnapshotDate,
-				IisBack:               tt.fields.IisBack,
-				IisBackIndex:          tt.fields.IisBackIndex,
-			}
-			if got := rf.IfNeedExceedLog(tt.args.logSize); got != tt.want {
-				t.Errorf("Raft.IfNeedExceedLog() = %v, want %v", got, tt.want)
-			}
-		})
-	}
-}
-
-func TestRaft_GetleaderId(t *testing.T) {
-	type fields struct {
-		mu                    sync.Mutex
-		peers                 []*RaftEnd
-		persister             *Persister
-		me                    int
-		dead                  int32
-		state                 int32
-		currentTerm           int
-		votedFor              int
-		log                   []pb.LogType
-		lastIncludeIndex      int
-		lastIncludeTerm       int
-		commitIndex           int
-		lastApplied           int
-		nextIndex             []int
-		matchIndex            []int
-		lastHearBeatTime      time.Time
-		lastSendHeartbeatTime time.Time
-		leaderId              int
-		applyCh               chan ApplyMsg
-		applyChTerm           chan ApplyMsg
-		SnapshotDate          []byte
-		IisBack               bool
-		IisBackIndex          int
-	}
-	tests := []struct {
-		name   string
-		fields fields
-		want   int
-	}{
-		// TODO: Add test cases.
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			rf := &Raft{
-				mu:                    tt.fields.mu,
-				peers:                 tt.fields.peers,
-				persister:             tt.fields.persister,
-				me:                    tt.fields.me,
-				dead:                  tt.fields.dead,
-				state:                 tt.fields.state,
-				currentTerm:           tt.fields.currentTerm,
-				votedFor:              tt.fields.votedFor,
-				log:                   tt.fields.log,
-				lastIncludeIndex:      tt.fields.lastIncludeIndex,
-				lastIncludeTerm:       tt.fields.lastIncludeTerm,
-				commitIndex:           tt.fields.commitIndex,
-				lastApplied:           tt.fields.lastApplied,
-				nextIndex:             tt.fields.nextIndex,
-				matchIndex:            tt.fields.matchIndex,
-				lastHearBeatTime:      tt.fields.lastHearBeatTime,
-				lastSendHeartbeatTime: tt.fields.lastSendHeartbeatTime,
-				leaderId:              tt.fields.leaderId,
-				applyCh:               tt.fields.applyCh,
-				applyChTerm:           tt.fields.applyChTerm,
-				SnapshotDate:          tt.fields.SnapshotDate,
-				IisBack:               tt.fields.IisBack,
-				IisBackIndex:          tt.fields.IisBackIndex,
-			}
-			if got := rf.GetleaderId(); got != tt.want {
-				t.Errorf("Raft.GetleaderId() = %v, want %v", got, tt.want)
-			}
-		})
-	}
-}
-
-func TestRaft_CheckIfDepose(t *testing.T) {
-	type fields struct {
-		mu                    sync.Mutex
-		peers                 []*RaftEnd
-		persister             *Persister
-		me                    int
-		dead                  int32
-		state                 int32
-		currentTerm           int
-		votedFor              int
-		log                   []pb.LogType
-		lastIncludeIndex      int
-		lastIncludeTerm       int
-		commitIndex           int
-		lastApplied           int
-		nextIndex             []int
-		matchIndex            []int
-		lastHearBeatTime      time.Time
-		lastSendHeartbeatTime time.Time
-		leaderId              int
-		applyCh               chan ApplyMsg
-		applyChTerm           chan ApplyMsg
-		SnapshotDate          []byte
-		IisBack               bool
-		IisBackIndex          int
-	}
-	tests := []struct {
-		name    string
-		fields  fields
-		wantRet bool
-	}{
-		// TODO: Add test cases.
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			rf := &Raft{
-				mu:                    tt.fields.mu,
-				peers:                 tt.fields.peers,
-				persister:             tt.fields.persister,
-				me:                    tt.fields.me,
-				dead:                  tt.fields.dead,
-				state:                 tt.fields.state,
-				currentTerm:           tt.fields.currentTerm,
-				votedFor:              tt.fields.votedFor,
-				log:                   tt.fields.log,
-				lastIncludeIndex:      tt.fields.lastIncludeIndex,
-				lastIncludeTerm:       tt.fields.lastIncludeTerm,
-				commitIndex:           tt.fields.commitIndex,
-				lastApplied:           tt.fields.lastApplied,
-				nextIndex:             tt.fields.nextIndex,
-				matchIndex:            tt.fields.matchIndex,
-				lastHearBeatTime:      tt.fields.lastHearBeatTime,
-				lastSendHeartbeatTime: tt.fields.lastSendHeartbeatTime,
-				leaderId:              tt.fields.leaderId,
-				applyCh:               tt.fields.applyCh,
-				applyChTerm:           tt.fields.applyChTerm,
-				SnapshotDate:          tt.fields.SnapshotDate,
-				IisBack:               tt.fields.IisBack,
-				IisBackIndex:          tt.fields.IisBackIndex,
-			}
-			if gotRet := rf.CheckIfDepose(); gotRet != tt.wantRet {
-				t.Errorf("Raft.CheckIfDepose() = %v, want %v", gotRet, tt.wantRet)
-			}
-		})
-	}
-}
-
-func TestMake(t *testing.T) {
-	type args struct {
-		me        int
-		persister *Persister
-		applyCh   chan ApplyMsg
-		conf      firconfig.RaftEnds
-	}
-	tests := []struct {
-		name string
-		args args
-		want *Raft
-	}{
-		// TODO: Add test cases.
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if got := Make(tt.args.me, tt.args.persister, tt.args.applyCh, tt.args.conf); !reflect.DeepEqual(got, tt.want) {
-				t.Errorf("Make() = %v, want %v", got, tt.want)
-			}
-		})
-	}
-}
-
-func TestRaft_StartRaft(t *testing.T) {
-	type fields struct {
-		mu                    sync.Mutex
-		peers                 []*RaftEnd
-		persister             *Persister
-		me                    int
-		dead                  int32
-		state                 int32
-		currentTerm           int
-		votedFor              int
-		log                   []pb.LogType
-		lastIncludeIndex      int
-		lastIncludeTerm       int
-		commitIndex           int
-		lastApplied           int
-		nextIndex             []int
-		matchIndex            []int
-		lastHearBeatTime      time.Time
-		lastSendHeartbeatTime time.Time
-		leaderId              int
-		applyCh               chan ApplyMsg
-		applyChTerm           chan ApplyMsg
-		SnapshotDate          []byte
-		IisBack               bool
-		IisBackIndex          int
-	}
-	type args struct {
-		conf firconfig.RaftEnd
-	}
-	tests := []struct {
-		name   string
-		fields fields
-		args   args
-	}{
-		// TODO: Add test cases.
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			rt := &Raft{
-				mu:                    tt.fields.mu,
-				peers:                 tt.fields.peers,
-				persister:             tt.fields.persister,
-				me:                    tt.fields.me,
-				dead:                  tt.fields.dead,
-				state:                 tt.fields.state,
-				currentTerm:           tt.fields.currentTerm,
-				votedFor:              tt.fields.votedFor,
-				log:                   tt.fields.log,
-				lastIncludeIndex:      tt.fields.lastIncludeIndex,
-				lastIncludeTerm:       tt.fields.lastIncludeTerm,
-				commitIndex:           tt.fields.commitIndex,
-				lastApplied:           tt.fields.lastApplied,
-				nextIndex:             tt.fields.nextIndex,
-				matchIndex:            tt.fields.matchIndex,
-				lastHearBeatTime:      tt.fields.lastHearBeatTime,
-				lastSendHeartbeatTime: tt.fields.lastSendHeartbeatTime,
-				leaderId:              tt.fields.leaderId,
-				applyCh:               tt.fields.applyCh,
-				applyChTerm:           tt.fields.applyChTerm,
-				SnapshotDate:          tt.fields.SnapshotDate,
-				IisBack:               tt.fields.IisBack,
-				IisBackIndex:          tt.fields.IisBackIndex,
-			}
-			rt.StartRaft(tt.args.conf)
-		})
-	}
-}
-
-func TestWaitConnect(t *testing.T) {
-	type args struct {
-		conf firconfig.RaftEnds
-	}
-	tests := []struct {
-		name string
-		args args
-		want []*RaftEnd
-	}{
-		// TODO: Add test cases.
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if got := WaitConnect(tt.args.conf); !reflect.DeepEqual(got, tt.want) {
-				t.Errorf("WaitConnect() = %v, want %v", got, tt.want)
-			}
-		})
+	select {
+	case <-testTimeout:
+		t.Fatal("Test timed out!")
+	case <-done:
+		// Test finished successfully
 	}
 }
