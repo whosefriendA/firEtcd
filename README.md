@@ -10,7 +10,7 @@
     - **分布式锁**: 内置简单易用的`分布式锁` API，并集成 Watchdog 租约机制，自动处理锁的租约和释放，防止因客户端故障导致的死锁。
 
 - **高性能存储与操作**
-    - **底层数据库**: 使用 [BuntDB](https://github.com/tidwall/buntdb) 作为存储引擎，支持内存模式和硬盘持久化。
+    - **底层数据库**: 使用 [BoltDB]([https://github.com/tidwall/buntdb](https://github.com/etcd-io/bbolt)) 作为存储引擎，支持硬盘持久化。
     - **丰富的操作语义**:
         - 支持按前缀（`Prefix`）进行范围查询和删除。
         - 提供 `CAS` (Compare-And-Swap) 原子操作，可用于实现乐观锁。
