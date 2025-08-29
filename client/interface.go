@@ -19,6 +19,11 @@ type KVStore interface {
 	DeleteWithPrefix(prefix string) error
 	CAS(key string, origin, dest []byte, TTL time.Duration) (bool, error)
 	GetWithPrefix(key string) ([][]byte, error)
+	// Lease operations
+	LeaseGrant(ttl time.Duration) (int64, error)
+	LeaseRevoke(leaseID int64) error
+	LeaseTimeToLive(leaseID int64, withKeys bool) (int64, []string, error)
+	AutoKeepAlive(leaseID int64, interval time.Duration) (cancel func())
 }
 
 // --- 角色 2: 分布式锁 ---
@@ -26,6 +31,12 @@ type KVStore interface {
 type Locker interface {
 	Lock(key string, TTL time.Duration) (id string, err error)
 	Unlock(key, id string) (bool, error)
+	LockWithKeepAlive(key string, TTL time.Duration) (id string, cancel func(), err error)
+	// Lease operations for lock management
+	LeaseGrant(ttl time.Duration) (int64, error)
+	LeaseRevoke(leaseID int64) error
+	LeaseTimeToLive(leaseID int64, withKeys bool) (int64, []string, error)
+	AutoKeepAlive(leaseID int64, interval time.Duration) (cancel func())
 }
 
 // --- 角色 3: 批量操作 ---
@@ -57,10 +68,6 @@ type Querier interface {
 	KVsWithPage(pageSize, pageIndex int) ([]common.Pair, error)
 }
 
-type WatchDoger interface {
-	WatchDog(key string, value []byte) (cancel func())
-}
-
 // --- 静态检查 ---
 // 确保 *Clerk 类型实现了我们定义的所有角色接口。
 var _ KVStore = (*Clerk)(nil)
@@ -69,4 +76,3 @@ var _ Pipeliner = (*Clerk)(nil)
 var _ BatchWriter = (*Clerk)(nil)
 var _ Watcher = (*Clerk)(nil)
 var _ Querier = (*Clerk)(nil)
-var _ WatchDoger = (*Clerk)(nil)

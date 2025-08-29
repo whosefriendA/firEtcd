@@ -8,13 +8,13 @@ import (
 	"fmt"
 	"io"
 	"math/big"
+	"strconv"
 	"sync"
 	"time"
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
-	"github.com/google/uuid"
 	"github.com/whosefriendA/firEtcd/common"
 	"github.com/whosefriendA/firEtcd/kvraft"
 	"github.com/whosefriendA/firEtcd/pkg/firconfig"
@@ -251,7 +251,7 @@ func (c *Clerk) watchEtcd() {
 				if kvclient.Realconn != nil {
 					kvclient.Realconn.Close()
 				}
-				k := kvraft.NewKvClient(c.conf.EtcdAddrs[i])
+				k := kvraft.NewKvClient(c.conf.EtcdAddrs[i], c.conf.TLS)
 				if k != nil {
 					c.servers[i] = k
 					// firLog.Logger.Warnf("update etcd server[%d] addr[%s]", i, c.conf.EtcdAddrs[i])
@@ -473,6 +473,18 @@ func (ck *Clerk) write(key string, value, oriValue []byte, TTL time.Duration, op
 			continue
 		}
 
+		// If TTL>0 and LeaseId not yet acquired, try to grant a lease on the target server
+		if TTL > 0 && args.LeaseId == 0 {
+			leaseClient := pb.NewLeaseClient(ck.servers[ck.nextSendLocalId].Realconn)
+			lr, lerr := leaseClient.LeaseGrant(context.Background(), &pb.LeaseGrantRequest{TTLMs: int64(TTL / time.Millisecond)})
+			if lerr != nil || lr == nil || lr.ID == 0 {
+				// try next server
+				ck.changeNextSendId()
+				continue
+			}
+			args.LeaseId = lr.ID
+		}
+
 		// firLog.Logger.Infof("clinet [%d] [PutAppend]:send[%d] args[%v]", ck.clientId, ck.nextSendLocalId, args.String())
 		reply, err := ck.servers[ck.nextSendLocalId].Conn.PutAppend(context.Background(), &args)
 		// firLog.Logger.Debugln("receive etcd:", reply.String(), err)
@@ -556,6 +568,44 @@ func (ck *Clerk) CAS(key string, origin, dest []byte, TTL time.Duration) (bool, 
 }
 
 func (ck *Clerk) BatchWrite(p *Pipe) error {
+	// Pre-grant leases for ops with DeadTime>0
+	for i := range p.Ops {
+		op := &p.Ops[i]
+		if op.Entry.DeadTime != 0 && op.LeaseId == 0 {
+			// compute remaining TTL
+			ttlMs := op.Entry.DeadTime - time.Now().UnixMilli()
+			if ttlMs <= 0 {
+				continue
+			}
+			granted := false
+			attempts := 0
+			for attempts < 2*len(ck.servers) && !granted {
+				// rotate to a valid server
+				validCount := 0
+				for !ck.servers[ck.nextSendLocalId].Valid {
+					ck.changeNextSendId()
+					validCount++
+					if validCount == len(ck.servers) {
+						break
+					}
+				}
+				if validCount == len(ck.servers) {
+					time.Sleep(10 * time.Millisecond)
+					attempts++
+					continue
+				}
+				leaseClient := pb.NewLeaseClient(ck.servers[ck.nextSendLocalId].Realconn)
+				lr, lerr := leaseClient.LeaseGrant(context.Background(), &pb.LeaseGrantRequest{TTLMs: ttlMs})
+				if lerr != nil || lr == nil || lr.ID == 0 {
+					ck.changeNextSendId()
+					attempts++
+					continue
+				}
+				op.LeaseId = lr.ID
+				granted = true
+			}
+		}
+	}
 	return ck.write("", p.Marshal(), nil, 0, int32(pb.OpType_BatchT))
 }
 
@@ -603,56 +653,159 @@ func (ck *Clerk) KVsWithPage(pageSize, pageIndex int) ([]common.Pair, error) {
 	return ck.doGetKV("", true, pb.OpType_GetKVs, pageSize, pageIndex)
 }
 
-// TODO 当TTL为零时，启动watchDog机制
 func (ck *Clerk) Lock(key string, TTL time.Duration) (id string, err error) {
-	r, err := uuid.NewRandom()
+	// 使用 Lease 机制实现分布式锁
+	leaseID, err := ck.LeaseGrant(TTL)
 	if err != nil {
-		firlog.Logger.Fatalln(err)
 		return "", err
-	}
-	ok, err := ck.CAS(key, nil, []byte(r.String()), TTL)
-	if err != nil {
-		firlog.Logger.Fatalln(err)
-		return "", err
-	}
-	if !ok {
-		return "", nil
 	}
 
-	return r.String(), nil
+	// 使用 CAS 确保原子性获取锁
+	leaseIDStr := strconv.FormatInt(leaseID, 10)
+	ok, err := ck.CAS(key, nil, []byte(leaseIDStr), 0)
+	if err != nil || !ok {
+		// 获取锁失败，清理租约
+		ck.LeaseRevoke(leaseID)
+		return "", err
+	}
+
+	return leaseIDStr, nil
 }
 
 func (ck *Clerk) Unlock(key, id string) (bool, error) {
+	// 验证锁 ID 并释放
 	ok, err := ck.CAS(key, []byte(id), nil, 0)
-	if err != nil {
-		firlog.Logger.Fatalln(err)
+	if err != nil || !ok {
 		return false, err
 	}
-	if !ok {
-		return false, nil
+
+	// 释放成功后，撤销租约
+	leaseID, _ := strconv.ParseInt(id, 10, 64)
+	if leaseID > 0 {
+		ck.LeaseRevoke(leaseID)
 	}
+
 	return true, nil
 }
 
-func (ck *Clerk) WatchDog(key string, value []byte) (cancel func()) {
-	// 选择最小5s的生存周期
-	var (
-		TTL  = time.Second * 5
-		flag = new(bool)
-	)
-	ck.Put(key, value, TTL)
+// LockWithKeepAlive 获取锁并自动续约，返回取消函数
+func (ck *Clerk) LockWithKeepAlive(key string, TTL time.Duration) (id string, cancel func(), err error) {
+	leaseID, err := ck.LeaseGrant(TTL)
+	if err != nil {
+		return "", nil, err
+	}
+
+	// 使用 CAS 确保原子性获取锁
+	leaseIDStr := strconv.FormatInt(leaseID, 10)
+	ok, err := ck.CAS(key, nil, []byte(leaseIDStr), 0)
+	if err != nil || !ok {
+		ck.LeaseRevoke(leaseID)
+		return "", nil, err
+	}
+
+	// 启动自动续约
+	cancelFunc := ck.AutoKeepAlive(leaseID, TTL/3)
+
+	// 返回取消函数，调用者可以手动停止续约
+	return leaseIDStr, func() {
+		cancelFunc()
+		ck.Unlock(key, leaseIDStr)
+	}, nil
+}
+
+// Lease convenience methods
+func (ck *Clerk) LeaseGrant(ttl time.Duration) (int64, error) {
+	// find a valid server
+	validCount := 0
+	for !ck.servers[ck.nextSendLocalId].Valid {
+		ck.changeNextSendId()
+		validCount++
+		if validCount == len(ck.servers) {
+			return 0, fmt.Errorf("no valid servers")
+		}
+	}
+	leaseClient := pb.NewLeaseClient(ck.servers[ck.nextSendLocalId].Realconn)
+	lr, err := leaseClient.LeaseGrant(context.Background(), &pb.LeaseGrantRequest{TTLMs: int64(ttl / time.Millisecond)})
+	if err != nil || lr == nil {
+		return 0, err
+	}
+	return lr.ID, nil
+}
+
+func (ck *Clerk) LeaseRevoke(leaseID int64) error {
+	validCount := 0
+	for !ck.servers[ck.nextSendLocalId].Valid {
+		ck.changeNextSendId()
+		validCount++
+		if validCount == len(ck.servers) {
+			return fmt.Errorf("no valid servers")
+		}
+	}
+	leaseClient := pb.NewLeaseClient(ck.servers[ck.nextSendLocalId].Realconn)
+	_, err := leaseClient.LeaseRevoke(context.Background(), &pb.LeaseRevokeRequest{ID: leaseID})
+	return err
+}
+
+func (ck *Clerk) LeaseTimeToLive(leaseID int64, withKeys bool) (int64, []string, error) {
+	validCount := 0
+	for !ck.servers[ck.nextSendLocalId].Valid {
+		ck.changeNextSendId()
+		validCount++
+		if validCount == len(ck.servers) {
+			return 0, nil, fmt.Errorf("no valid servers")
+		}
+	}
+	leaseClient := pb.NewLeaseClient(ck.servers[ck.nextSendLocalId].Realconn)
+	lr, err := leaseClient.LeaseTimeToLive(context.Background(), &pb.LeaseTimeToLiveRequest{ID: leaseID, Keys: withKeys})
+	if err != nil || lr == nil {
+		return 0, nil, err
+	}
+	return lr.TTLMs, lr.Keys, nil
+}
+
+// AutoKeepAlive starts background renewal for a lease, returns cancel function
+func (ck *Clerk) AutoKeepAlive(leaseID int64, interval time.Duration) (cancel func()) {
+	flag := new(bool)
 	*flag = false
-	go func(key string, ori []byte) { //每500ms续期一次WatchDog
+	go func() {
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
 		for {
-			curData := make([]byte, len(ori))
-			copy(curData, ori)
 			if *flag {
 				return
 			}
-			ck.Put(key, curData, TTL)
-			time.Sleep(TTL)
+			select {
+			case <-ticker.C:
+				// try to keep alive
+				validCount := 0
+				for !ck.servers[ck.nextSendLocalId].Valid {
+					ck.changeNextSendId()
+					validCount++
+					if validCount == len(ck.servers) {
+						time.Sleep(interval)
+						continue
+					}
+				}
+				leaseClient := pb.NewLeaseClient(ck.servers[ck.nextSendLocalId].Realconn)
+				stream, err := leaseClient.LeaseKeepAlive(context.Background())
+				if err != nil {
+					time.Sleep(interval)
+					continue
+				}
+				if err := stream.Send(&pb.LeaseKeepAliveRequest{ID: leaseID}); err != nil {
+					stream.CloseSend()
+					time.Sleep(interval)
+					continue
+				}
+				resp, err := stream.Recv()
+				stream.CloseSend()
+				if err != nil || resp == nil || resp.TTLMs == 0 {
+					// lease expired or not found
+					return
+				}
+			}
 		}
-	}(key, value)
+	}()
 	return func() {
 		*flag = true
 	}

@@ -176,6 +176,7 @@ func (g *Gateway) put(w http.ResponseWriter, r *http.Request) {
 			}
 			ttl = time.Until(deadTimestamp)
 		}
+		// Client pipeline will now internally grant lease when TTL>0 and attach LeaseId
 		pipe.Put(pairs[i].Key, common.StringToBytes(pairs[i].Value), ttl)
 	}
 

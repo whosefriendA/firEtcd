@@ -16,6 +16,7 @@ type Op struct {
 	Key      string
 	OriValue []byte
 	Entry    common.Entry
+	LeaseId  int64 // optional lease id for key association
 	// DeadTIme int64
 }
 

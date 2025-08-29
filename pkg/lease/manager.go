@@ -17,12 +17,12 @@ type Lease struct {
 // LeaseManager manages leases and their associated keys.
 type LeaseManager struct {
 	sync.RWMutex
-	leases        map[int64]*Lease
-	nextLeaseID   int64
-	minLeaseTTL   time.Duration
-	revokeC       chan int64 // Channel to signal lease revocation
-	stopC         chan struct{}
-	wg            sync.WaitGroup
+	leases      map[int64]*Lease
+	nextLeaseID int64
+	minLeaseTTL time.Duration
+	revokeC     chan int64 // Channel to signal lease revocation
+	stopC       chan struct{}
+	wg          sync.WaitGroup
 }
 
 // NewLeaseManager creates a new LeaseManager.
@@ -92,12 +92,12 @@ func (lm *LeaseManager) revokeLease(id int64) {
 	lm.Lock()
 	defer lm.Unlock()
 
-	lease, ok := lm.leases[id]
+	_, ok := lm.leases[id]
 	if !ok {
 		return // Lease not found
 	}
 
-	delete(lm.leases, id);
+	delete(lm.leases, id)
 
 	// TODO: Delete all keys associated with this lease
 	// TODO: Persist lease state to Raft
@@ -113,7 +113,7 @@ func (lm *LeaseManager) KeepAlive(id int64) (*Lease, error) {
 		return nil, nil // Lease not found
 	}
 
-	lease.ExpiresAt = time.Now().Add(lease.TTL);
+	lease.ExpiresAt = time.Now().Add(lease.TTL)
 
 	// TODO: Persist lease state to Raft
 
@@ -169,6 +169,19 @@ func (lm *LeaseManager) checkExpirations() {
 			lm.revokeC <- id
 		}
 	}
+}
+
+// ExpiredLeases returns IDs of leases expired at the given time (does not modify state).
+func (lm *LeaseManager) ExpiredLeases(now time.Time) []int64 {
+	lm.RLock()
+	defer lm.RUnlock()
+	ret := make([]int64, 0)
+	for id, l := range lm.leases {
+		if now.After(l.ExpiresAt) {
+			ret = append(ret, id)
+		}
+	}
+	return ret
 }
 
 // Stop stops the LeaseManager.

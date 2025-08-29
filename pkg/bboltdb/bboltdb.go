@@ -125,12 +125,6 @@ func (b *BoltDB) GetEntry(key string) (ret common.Entry, err error) {
 		if err := gob.NewDecoder(bytes.NewReader(v)).Decode(&ret); err != nil {
 			return err
 		}
-		// Emulate TTL: check if the entry is expired.
-		if ret.DeadTime != 0 && time.Now().UnixMilli() > ret.DeadTime {
-			// Entry is expired. Treat as not found.
-			// A more advanced implementation could trigger a lazy delete here in a separate Update tx.
-			return common.ErrNotFound
-		}
 		return nil
 	})
 	return
@@ -141,14 +135,9 @@ func (b *BoltDB) GetEntryWithPrefix(prefix string) (ret []common.Entry, err erro
 	err = b.db.View(func(tx *bbolt.Tx) error {
 		c := tx.Bucket(defaultBucket).Cursor()
 		prefixBytes := []byte(prefix)
-		now := time.Now().UnixMilli()
 		for k, v := c.Seek(prefixBytes); k != nil && bytes.HasPrefix(k, prefixBytes); k, v = c.Next() {
 			var entry common.Entry
 			if gob.NewDecoder(bytes.NewReader(v)).Decode(&entry) == nil {
-				// Emulate TTL
-				if entry.DeadTime != 0 && now > entry.DeadTime {
-					continue // Skip expired entry
-				}
 				ret = append(ret, entry)
 			}
 		}
@@ -162,14 +151,9 @@ func (b *BoltDB) GetPairsWithPrefix(prefix string) (ret []common.Pair, err error
 	err = b.db.View(func(tx *bbolt.Tx) error {
 		c := tx.Bucket(defaultBucket).Cursor()
 		prefixBytes := []byte(prefix)
-		now := time.Now().UnixMilli()
 		for k, v := c.Seek(prefixBytes); k != nil && bytes.HasPrefix(k, prefixBytes); k, v = c.Next() {
 			var entry common.Entry
 			if gob.NewDecoder(bytes.NewReader(v)).Decode(&entry) == nil {
-				// Emulate TTL
-				if entry.DeadTime != 0 && now > entry.DeadTime {
-					continue // Skip expired entry
-				}
 				keyCopy := make([]byte, len(k))
 				copy(keyCopy, k)
 				ret = append(ret, common.Pair{Key: string(keyCopy), Entry: entry})
@@ -190,13 +174,6 @@ func (b *BoltDB) Put(key string, value []byte, DeadTime int64) error {
 }
 
 func (b *BoltDB) PutEntry(key string, entry common.Entry) error {
-	// TTL check before writing
-	if entry.DeadTime != 0 && time.Now().UnixMilli() > entry.DeadTime {
-		// If the entry is already expired, don't even write it.
-		// To be fully compatible, we could delete it if it exists.
-		return b.Del(key)
-	}
-
 	return b.db.Update(func(tx *bbolt.Tx) error {
 		var buf bytes.Buffer
 		if err := gob.NewEncoder(&buf).Encode(entry); err != nil {
@@ -212,7 +189,6 @@ func (b *BoltDB) Keys(pageSize, pageIndex int) (ret []common.Pair, err error) {
 		c := tx.Bucket(defaultBucket).Cursor()
 		skip := pageIndex * pageSize
 		count := 0
-		now := time.Now().UnixMilli()
 
 		// Move cursor to the first element of the page
 		k, v := c.First()
@@ -224,9 +200,6 @@ func (b *BoltDB) Keys(pageSize, pageIndex int) (ret []common.Pair, err error) {
 		for ; k != nil && count < pageSize; k, v = c.Next() {
 			var entry common.Entry
 			if gob.NewDecoder(bytes.NewReader(v)).Decode(&entry) == nil {
-				if entry.DeadTime != 0 && now > entry.DeadTime {
-					continue // Skip expired
-				}
 				keyCopy := make([]byte, len(k))
 				copy(keyCopy, k)
 				entry.Value = nil // As per original buntdb implementation
@@ -245,7 +218,6 @@ func (b *BoltDB) KVs(pageSize, pageIndex int) (ret []common.Pair, err error) {
 		c := tx.Bucket(defaultBucket).Cursor()
 		skip := pageIndex * pageSize
 		count := 0
-		now := time.Now().UnixMilli()
 
 		k, v := c.First()
 		for i := 0; i < skip && k != nil; i++ {
@@ -255,9 +227,6 @@ func (b *BoltDB) KVs(pageSize, pageIndex int) (ret []common.Pair, err error) {
 		for ; k != nil && count < pageSize; k, v = c.Next() {
 			var entry common.Entry
 			if gob.NewDecoder(bytes.NewReader(v)).Decode(&entry) == nil {
-				if entry.DeadTime != 0 && now > entry.DeadTime {
-					continue // Skip expired
-				}
 				keyCopy := make([]byte, len(k))
 				copy(keyCopy, k)
 				ret = append(ret, common.Pair{Key: string(keyCopy), Entry: entry})

@@ -75,6 +75,7 @@ message PutAppendArgs {
                 // letters, otherwise RPC will break.
   int64 ClientId = 6;
   int32 LatestOffset = 7;
+  int64 LeaseId = 8; // optional lease id; if non-zero, server will attach key to the lease
 }
 
 message PutAppendReply {
@@ -121,4 +122,47 @@ service kvserver {
   rpc Get(GetArgs) returns (GetReply);
   rpc PutAppend(PutAppendArgs) returns (PutAppendReply);
   rpc Watch(WatchRequest) returns (stream WatchResponse);
+}
+
+// Lease service definitions
+message LeaseGrantRequest {
+  int64 TTLMs = 1; // TTL in milliseconds
+}
+
+message LeaseGrantResponse {
+  int64 ID = 1;
+  int64 TTLMs = 2;
+}
+
+message LeaseRevokeRequest {
+  int64 ID = 1;
+}
+
+message LeaseRevokeResponse {}
+
+message LeaseKeepAliveRequest {
+  int64 ID = 1;
+}
+
+message LeaseKeepAliveResponse {
+  int64 ID = 1;
+  int64 TTLMs = 2; // remaining TTL in ms
+}
+
+message LeaseTimeToLiveRequest {
+  int64 ID = 1;
+  bool keys = 2; // whether to return attached keys
+}
+
+message LeaseTimeToLiveResponse {
+  int64 ID = 1;
+  int64 TTLMs = 2; // remaining TTL in ms
+  repeated string keys = 3;
+}
+
+service lease {
+  rpc LeaseGrant(LeaseGrantRequest) returns (LeaseGrantResponse);
+  rpc LeaseRevoke(LeaseRevokeRequest) returns (LeaseRevokeResponse);
+  rpc LeaseKeepAlive(stream LeaseKeepAliveRequest) returns (stream LeaseKeepAliveResponse);
+  rpc LeaseTimeToLive(LeaseTimeToLiveRequest) returns (LeaseTimeToLiveResponse);
 }

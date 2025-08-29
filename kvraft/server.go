@@ -13,18 +13,18 @@ import (
 	"sync/atomic"
 	"time"
 
-	"google.golang.org/grpc/credentials"
-
 	"github.com/whosefriendA/firEtcd/pkg/firlog"
 
 	"github.com/whosefriendA/firEtcd/common"
 	bboltdb "github.com/whosefriendA/firEtcd/pkg/bboltdb"
 	"github.com/whosefriendA/firEtcd/pkg/firconfig"
+	"github.com/whosefriendA/firEtcd/pkg/lease"
 	"github.com/whosefriendA/firEtcd/proto/pb"
 	"github.com/whosefriendA/firEtcd/raft"
 
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/codes"  // 为 gRPC 状态添加
+	"google.golang.org/grpc/codes" // 为 gRPC 状态添加
+	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/status" // 为 gRPC 状态添加
 )
 
@@ -59,6 +59,8 @@ type KVServer struct {
 	watcherManager *WatcherManager
 
 	eventNotifier chan WatchEvent
+
+	leaseMgr *lease.LeaseManager
 }
 
 // WatchEventType 映射 protobuf 枚举
@@ -347,6 +349,7 @@ func (kv *KVServer) PutAppend(_ context.Context, args *pb.PutAppendArgs) (reply 
 			Value:    args.Value,
 			DeadTime: args.DeadTime,
 		},
+		LeaseId: args.LeaseId,
 	}
 
 	//start前需要查看本地log缓存是否有seq
@@ -642,6 +645,9 @@ func (kv *KVServer) HandleApplychCommand(raft_type raft.ApplyMsg) []WatchEvent {
 		if err != nil {
 			firlog.Logger.Fatalf("database putEntry faild:%s", err)
 		}
+		if OP.LeaseId != 0 && kv.leaseMgr != nil {
+			_ = kv.leaseMgr.AttachKey(OP.LeaseId, OP.Key)
+		}
 
 		eventsToNotify = append(eventsToNotify, WatchEvent{Type: WatchEventTypePut, Key: OP.Key, Value: OP.Entry.Value})
 		firlog.Logger.Debugf("KVServer %d: 已应用 Put, Key: %s。已排队等待 watch 通知。", kv.me, OP.Key)
@@ -666,6 +672,9 @@ func (kv *KVServer) HandleApplychCommand(raft_type raft.ApplyMsg) []WatchEvent {
 		if err != nil {
 			firlog.Logger.Fatalf("database putEntry faild:%s", err)
 		}
+		if OP.LeaseId != 0 && kv.leaseMgr != nil {
+			_ = kv.leaseMgr.AttachKey(OP.LeaseId, OP.Key)
+		}
 
 		eventsToNotify = append(eventsToNotify, WatchEvent{Type: WatchEventTypePut, Key: OP.Key, Value: result})
 		firlog.Logger.Debugf("KVServer %d: 已应用 Put, Key: %s。已排队等待 watch 通知。", kv.me, OP.Key)
@@ -675,6 +684,9 @@ func (kv *KVServer) HandleApplychCommand(raft_type raft.ApplyMsg) []WatchEvent {
 	case int32(pb.OpType_DelT):
 		_, err := kv.db.GetEntry(OP.Key) // 检查键是否存在
 		kv.db.Del(OP.Key)
+		if OP.LeaseId != 0 && kv.leaseMgr != nil {
+			_ = kv.leaseMgr.DetachKey(OP.LeaseId, OP.Key)
+		}
 		if err == nil { // 仅当键实际存在时才通知
 			eventsToNotify = append(eventsToNotify, WatchEvent{Type: WatchEventTypeDelete, Key: OP.Key})
 			firlog.Logger.Debugf("KVServer %d: 已应用 Del, Key: %s。已排队等待 watch 通知。", kv.me, OP.Key)
@@ -691,11 +703,17 @@ func (kv *KVServer) HandleApplychCommand(raft_type raft.ApplyMsg) []WatchEvent {
 		if bytes.Equal(ori.Value, OP.OriValue) {
 			if len(OP.Entry.Value) == 0 {
 				kv.db.Del(OP.Key)
+				if OP.LeaseId != 0 && kv.leaseMgr != nil {
+					_ = kv.leaseMgr.DetachKey(OP.LeaseId, OP.Key)
+				}
 				eventsToNotify = append(eventsToNotify, WatchEvent{Type: WatchEventTypeDelete, Key: OP.Key})
 				firlog.Logger.Debugf("KVServer %d: 已应用 DelWithPrefix, Prefix: %s。已排队等待 watch 通知 (作为单个前缀删除)。", kv.me, OP.Key)
 
 			} else {
 				kv.db.PutEntry(OP.Key, OP.Entry)
+				if OP.LeaseId != 0 && kv.leaseMgr != nil {
+					_ = kv.leaseMgr.AttachKey(OP.LeaseId, OP.Key)
+				}
 				eventsToNotify = append(eventsToNotify, WatchEvent{Type: WatchEventTypePut, Key: OP.Key, Value: OP.Entry.Value})
 				firlog.Logger.Debugf("KVServer %d: 已应用 DelWithPrefix, Prefix: %s。已排队等待 watch 通知 (作为单个前缀删除)。", kv.me, OP.Key)
 
@@ -722,6 +740,9 @@ func (kv *KVServer) HandleApplychCommand(raft_type raft.ApplyMsg) []WatchEvent {
 			switch op.OpType {
 			case int32(pb.OpType_PutT):
 				kv.db.PutEntry(op.Key, op.Entry)
+				if op.LeaseId != 0 && kv.leaseMgr != nil {
+					_ = kv.leaseMgr.AttachKey(op.LeaseId, op.Key)
+				}
 				eventsToNotify = append(eventsToNotify, WatchEvent{Type: WatchEventTypePut, Key: op.Key, Value: op.Entry.Value})
 			case int32(pb.OpType_AppendT):
 				ori, _ := kv.db.GetEntry(op.Key)
@@ -738,12 +759,19 @@ func (kv *KVServer) HandleApplychCommand(raft_type raft.ApplyMsg) []WatchEvent {
 					Value:    result,
 					DeadTime: op.Entry.DeadTime,
 				})
+				if op.LeaseId != 0 && kv.leaseMgr != nil {
+					_ = kv.leaseMgr.AttachKey(op.LeaseId, op.Key)
+				}
 				eventsToNotify = append(eventsToNotify, WatchEvent{Type: WatchEventTypePut, Key: op.Key, Value: result})
 			case int32(pb.OpType_DelT):
 				kv.db.Del(op.Key)
+				if op.LeaseId != 0 && kv.leaseMgr != nil {
+					_ = kv.leaseMgr.DetachKey(op.LeaseId, op.Key)
+				}
 				eventsToNotify = append(eventsToNotify, WatchEvent{Type: WatchEventTypeDelete, Key: op.Key})
 			case int32(pb.OpType_DelWithPrefix):
 				kv.db.DelWithPrefix(op.Key)
+				// prefix detach is non-trivial; skipped here
 				eventsToNotify = append(eventsToNotify, WatchEvent{Type: WatchEventTypeDelete, Key: op.Key})
 			}
 			// firlog.Logger.Infof("exec batch op: %+v", op)
@@ -880,7 +908,29 @@ func StartKVServer(conf firconfig.Kvserver, me int, persister *raft.Persister, m
 		eventNotifier:    make(chan WatchEvent, 1024),
 	}
 
+	// initialize lease manager with a sane minimal TTL (e.g., 1s)
+	kv.leaseMgr = lease.NewLeaseManager(time.Second)
+
 	go kv.notifierLoop()
+
+	// background lease expiration loop (leader only)
+	go func() {
+		ticker := time.NewTicker(time.Second)
+		defer ticker.Stop()
+		for {
+			if kv.killed() {
+				return
+			}
+			<-ticker.C
+			// only leader and fully recovered can propose revokes
+			if _, isLeader := kv.rf.GetState(); !isLeader || !kv.rf.IisBack {
+				continue
+			}
+			for _, id := range kv.leaseMgr.ExpiredLeases(time.Now()) {
+				kv.proposeLeaseRevoke(id)
+			}
+		}
+	}()
 
 	kv.rf = raft.Make(me, persister, kv.applyCh, conf.Rafts)
 
@@ -922,6 +972,8 @@ func StartKVServer(conf firconfig.Kvserver, me int, persister *raft.Persister, m
 	// 创建gRPC服务器，启用TLS
 	gServer := grpc.NewServer(grpc.Creds(creds))
 	pb.RegisterKvserverServer(gServer, kv)
+	// register lease service
+	pb.RegisterLeaseServer(gServer, NewLeaseService(kv))
 	go func() {
 		if err := gServer.Serve(lis); err != nil {
 			firlog.Logger.Fatalln("failed to serve : ", err.Error())
@@ -933,4 +985,21 @@ func StartKVServer(conf firconfig.Kvserver, me int, persister *raft.Persister, m
 
 	firlog.Logger.Infof("server [%d] restart", kv.me)
 	return kv
+}
+
+func (kv *KVServer) proposeLeaseRevoke(leaseID int64) {
+	// Get keys attached to this lease and propose deletes via Raft
+	keys := kv.leaseMgr.GetLeaseKeys(leaseID)
+	for _, k := range keys {
+		op := raft.Op{
+			ClientId: 0,
+			Offset:   0,
+			OpType:   int32(pb.OpType_DelT),
+			Key:      k,
+			LeaseId:  leaseID,
+		}
+		kv.rf.Start(op.Marshal())
+	}
+	// Finally, update local lease manager to drop the lease entry itself
+	_ = kv.leaseMgr.Revoke(leaseID)
 }

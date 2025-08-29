@@ -191,6 +191,81 @@ func (mr *MockLockerMockRecorder) Unlock(key, id interface{}) *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Unlock", reflect.TypeOf((*MockLocker)(nil).Unlock), key, id)
 }
 
+// LockWithKeepAlive mocks base method.
+func (m *MockLocker) LockWithKeepAlive(key string, TTL time.Duration) (string, func(), error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "LockWithKeepAlive", key, TTL)
+	ret0, _ := ret[0].(string)
+	ret1, _ := ret[1].(func())
+	ret2, _ := ret[2].(error)
+	return ret0, ret1, ret2
+}
+
+// LockWithKeepAlive indicates an expected call of LockWithKeepAlive.
+func (mr *MockLockerMockRecorder) LockWithKeepAlive(key, TTL interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "LockWithKeepAlive", reflect.TypeOf((*MockLocker)(nil).LockWithKeepAlive), key, TTL)
+}
+
+// LeaseGrant mocks base method.
+func (m *MockLocker) LeaseGrant(ttl time.Duration) (int64, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "LeaseGrant", ttl)
+	ret0, _ := ret[0].(int64)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// LeaseGrant indicates an expected call of LeaseGrant.
+func (mr *MockLockerMockRecorder) LeaseGrant(ttl interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "LeaseGrant", reflect.TypeOf((*MockLocker)(nil).LeaseGrant), ttl)
+}
+
+// LeaseRevoke mocks base method.
+func (m *MockLocker) LeaseRevoke(leaseID int64) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "LeaseRevoke", leaseID)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// LeaseRevoke indicates an expected call of LeaseRevoke.
+func (mr *MockLockerMockRecorder) LeaseRevoke(leaseID interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "LeaseRevoke", reflect.TypeOf((*MockLocker)(nil).LeaseRevoke), leaseID)
+}
+
+// LeaseTimeToLive mocks base method.
+func (m *MockLocker) LeaseTimeToLive(leaseID int64, withKeys bool) (int64, []string, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "LeaseTimeToLive", leaseID, withKeys)
+	ret0, _ := ret[0].(int64)
+	ret1, _ := ret[1].([]string)
+	ret2, _ := ret[2].(error)
+	return ret0, ret1, ret2
+}
+
+// LeaseTimeToLive indicates an expected call of LeaseTimeToLive.
+func (mr *MockLockerMockRecorder) LeaseTimeToLive(leaseID, withKeys interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "LeaseTimeToLive", reflect.TypeOf((*MockLocker)(nil).LeaseTimeToLive), leaseID, withKeys)
+}
+
+// AutoKeepAlive mocks base method.
+func (m *MockLocker) AutoKeepAlive(leaseID int64, interval time.Duration) func() {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "AutoKeepAlive", leaseID, interval)
+	ret0, _ := ret[0].(func())
+	return ret0
+}
+
+// AutoKeepAlive indicates an expected call of AutoKeepAlive.
+func (mr *MockLockerMockRecorder) AutoKeepAlive(leaseID, interval interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "AutoKeepAlive", reflect.TypeOf((*MockLocker)(nil).AutoKeepAlive), leaseID, interval)
+}
+
 // MockPipeliner is a mock of Pipeliner interface.
 type MockPipeliner struct {
 	ctrl     *gomock.Controller
@@ -389,41 +464,4 @@ func (m *MockQuerier) KeysWithPage(pageSize, pageIndex int) ([]common.Pair, erro
 func (mr *MockQuerierMockRecorder) KeysWithPage(pageSize, pageIndex interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "KeysWithPage", reflect.TypeOf((*MockQuerier)(nil).KeysWithPage), pageSize, pageIndex)
-}
-
-// MockWatchDoger is a mock of WatchDoger interface.
-type MockWatchDoger struct {
-	ctrl     *gomock.Controller
-	recorder *MockWatchDogerMockRecorder
-}
-
-// MockWatchDogerMockRecorder is the mock recorder for MockWatchDoger.
-type MockWatchDogerMockRecorder struct {
-	mock *MockWatchDoger
-}
-
-// NewMockWatchDoger creates a new mock instance.
-func NewMockWatchDoger(ctrl *gomock.Controller) *MockWatchDoger {
-	mock := &MockWatchDoger{ctrl: ctrl}
-	mock.recorder = &MockWatchDogerMockRecorder{mock}
-	return mock
-}
-
-// EXPECT returns an object that allows the caller to indicate expected use.
-func (m *MockWatchDoger) EXPECT() *MockWatchDogerMockRecorder {
-	return m.recorder
-}
-
-// WatchDog mocks base method.
-func (m *MockWatchDoger) WatchDog(key string, value []byte) func() {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "WatchDog", key, value)
-	ret0, _ := ret[0].(func())
-	return ret0
-}
-
-// WatchDog indicates an expected call of WatchDog.
-func (mr *MockWatchDogerMockRecorder) WatchDog(key, value interface{}) *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "WatchDog", reflect.TypeOf((*MockWatchDoger)(nil).WatchDog), key, value)
 }

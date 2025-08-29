@@ -67,6 +67,8 @@ func (p *Pipe) Put(key string, value []byte, TTL time.Duration) error {
 	}
 	if TTL != 0 {
 		op.Entry.DeadTime = time.Now().Add(TTL).UnixMilli()
+		// naive per-op lease grant: the actual client-side plumping may batch later
+		// This requires the concrete Clerk behind BatchWriter to handle lease creation when executing.
 	}
 	return p.append(op)
 }
