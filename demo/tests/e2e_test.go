@@ -41,6 +41,10 @@ func NewE2ETestSuite(t *testing.T) *E2ETestSuite {
 	registry := client.NewServiceRegistryV3(ck)
 	discovery := client.NewServiceDiscoveryV3(ck, ck)
 
+	// 等待客户端连接建立
+	t.Log("⏳ 等待客户端连接建立...")
+	time.Sleep(3 * time.Second)
+
 	return &E2ETestSuite{
 		registry:  registry,
 		discovery: discovery,
@@ -318,7 +322,7 @@ func TestE2EServiceLifecycle(t *testing.T) {
 			"lifecycle-test",
 			"test-instance",
 			"localhost:9999",
-			10*time.Second,
+			5*time.Second, // 减少到5秒
 			map[string]string{"test": "true"},
 		)
 		if err != nil {
@@ -334,7 +338,7 @@ func TestE2EServiceLifecycle(t *testing.T) {
 
 		// 3. 等待租约过期
 		t.Log("⏰ 步骤 3: 等待租约过期")
-		time.Sleep(12 * time.Second)
+		time.Sleep(7 * time.Second) // 减少到7秒
 
 		// 4. 验证服务自动清理
 		t.Log("🧹 步骤 4: 验证服务自动清理")
