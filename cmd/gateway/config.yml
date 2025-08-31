@@ -3,15 +3,23 @@ clerk:
     - localhost:51240
     - localhost:51241
     - localhost:51242
+  tls:
+    certFile: "../../pkg/tls/certs/client.crt"
+    keyFile: "../../pkg/tls/certs/client.key"
+    caFile: "../../pkg/tls/certs/ca.crt"
+    clientAuth: true
+    minVersion: "1.2"
+    maxVersion: "1.3"
+    insecureSkipVerify: false
 addr: 127.0.0.1
 baseUrl: "/firEtcd"
 port: :51030
 
 # TLS配置（可选）
 tls:
-  certFile: "certs/gateway.crt"
-  keyFile: "certs/gateway.key"
-  caFile: "certs/ca.crt"
+  certFile: "../../pkg/tls/certs/gateway.crt"
+  keyFile: "../../pkg/tls/certs/gateway.key"
+  caFile: "../../pkg/tls/certs/ca.crt"
   clientAuth: true
   minVersion: "1.2"
   maxVersion: "1.3"
