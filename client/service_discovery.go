@@ -38,13 +38,11 @@ func NewServiceRegistryV3(ck KVStore) *ServiceRegistryV3 {
 
 // Register 注册服务实例
 func (sr *ServiceRegistryV3) Register(ctx context.Context, serviceName, serviceID, endpoint string, TTL time.Duration, metadata map[string]string) (int64, error) {
-	// 创建租约
 	leaseID, err := sr.ck.LeaseGrant(TTL)
 	if err != nil {
 		return 0, fmt.Errorf("failed to grant lease: %w", err)
 	}
 
-	// 构建服务信息
 	serviceInfo := &ServiceInfo{
 		ID:       serviceID,
 		Name:     serviceName,
@@ -55,17 +53,14 @@ func (sr *ServiceRegistryV3) Register(ctx context.Context, serviceName, serviceI
 		LeaseID:  leaseID,
 	}
 
-	// 使用 etcdv3 风格的键格式
 	key := fmt.Sprintf("/services/%s/%s", serviceName, serviceID)
 
-	// 序列化服务信息
 	data, err := json.Marshal(serviceInfo)
 	if err != nil {
 		sr.ck.LeaseRevoke(leaseID)
 		return 0, fmt.Errorf("failed to marshal service info: %w", err)
 	}
 
-	// 注册服务（无 TTL，使用租约）
 	err = sr.ck.Put(key, data, 0)
 	if err != nil {
 		sr.ck.LeaseRevoke(leaseID)
@@ -99,7 +94,6 @@ func (sr *ServiceRegistryV3) RegisterWithLease(ctx context.Context, serviceName,
 func (sr *ServiceRegistryV3) Deregister(ctx context.Context, serviceName, serviceID string) error {
 	key := fmt.Sprintf("/services/%s/%s", serviceName, serviceID)
 
-	// 获取服务信息以获取租约ID
 	data, err := sr.ck.Get(key)
 	if err != nil {
 		return fmt.Errorf("service not found: %w", err)
@@ -110,13 +104,11 @@ func (sr *ServiceRegistryV3) Deregister(ctx context.Context, serviceName, servic
 		return fmt.Errorf("failed to unmarshal service info: %w", err)
 	}
 
-	// 删除服务记录
 	err = sr.ck.Put(key, nil, 0)
 	if err != nil {
 		return fmt.Errorf("failed to deregister service: %w", err)
 	}
 
-	// 撤销租约
 	if serviceInfo.LeaseID > 0 {
 		sr.ck.LeaseRevoke(serviceInfo.LeaseID)
 	}
@@ -126,8 +118,6 @@ func (sr *ServiceRegistryV3) Deregister(ctx context.Context, serviceName, servic
 
 // KeepAlive 续约服务
 func (sr *ServiceRegistryV3) KeepAlive(ctx context.Context, leaseID int64) error {
-	// 使用现有的 AutoKeepAlive 机制
-	// 这里返回一个函数，调用者可以调用它来停止续约
 	_ = sr.ck.AutoKeepAlive(leaseID, 30*time.Second)
 	return nil
 }
@@ -154,15 +144,14 @@ func (sd *ServiceDiscoveryV3) Get(ctx context.Context, serviceName string) ([]*S
 	services := make([]*ServiceInfo, 0, len(datas))
 	for _, data := range datas {
 		if len(data) == 0 {
-			continue // 跳过空值（已删除的服务）
+			continue
 		}
 
 		var serviceInfo ServiceInfo
 		if err := json.Unmarshal(data, &serviceInfo); err != nil {
-			continue // 跳过解析失败的数据
+			continue
 		}
 
-		// 检查租约状态
 		if serviceInfo.LeaseID > 0 {
 			ttl, _, err := sd.ck.LeaseTimeToLive(serviceInfo.LeaseID, false)
 			if err == nil {
@@ -196,7 +185,6 @@ func (sd *ServiceDiscoveryV3) HealthCheck(ctx context.Context, serviceName strin
 
 	health := make(map[string]bool)
 	for _, service := range services {
-		// 检查租约是否有效
 		if service.LeaseID > 0 {
 			ttl, _, err := sd.ck.LeaseTimeToLive(service.LeaseID, false)
 			health[service.ID] = err == nil && ttl > 0
@@ -229,8 +217,6 @@ func (lb *LoadBalancer) GetInstance(ctx context.Context, serviceName string) (*S
 		return nil, fmt.Errorf("no available instances for service: %s", serviceName)
 	}
 
-	// 简单的轮询策略（实际应用中可以使用更复杂的算法）
-	// 这里使用时间戳作为简单的轮询依据
 	index := time.Now().UnixNano() % int64(len(services))
 	return services[index], nil
 }

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"time"
@@ -10,7 +11,7 @@ import (
 )
 
 func main() {
-	fmt.Println("🔍 简单测试 etcd 基本功能...")
+	fmt.Println("🔍 调试 etcd 连接问题...")
 
 	// 创建客户端配置
 	conf := firconfig.Clerk{
@@ -64,6 +65,33 @@ func main() {
 		fmt.Printf("❌ 租约创建失败: %v\n", err)
 	} else {
 		fmt.Printf("✅ 租约创建成功，ID: %d\n", leaseID)
+	}
+
+	// 4. 测试服务注册
+	fmt.Println("📝 测试服务注册...")
+	registry := client.NewServiceRegistryV3(ck)
+	serviceLeaseID, err := registry.Register(
+		context.Background(),
+		"test-service",
+		"test-instance",
+		"localhost:8080",
+		30*time.Second,
+		map[string]string{"test": "true"},
+	)
+	if err != nil {
+		fmt.Printf("❌ 服务注册失败: %v\n", err)
+	} else {
+		fmt.Printf("✅ 服务注册成功，租约ID: %d\n", serviceLeaseID)
+	}
+
+	// 5. 测试服务发现
+	fmt.Println("🔍 测试服务发现...")
+	discovery := client.NewServiceDiscoveryV3(ck, ck)
+	services, err := discovery.Get(context.Background(), "test-service")
+	if err != nil {
+		fmt.Printf("❌ 服务发现失败: %v\n", err)
+	} else {
+		fmt.Printf("✅ 服务发现成功，找到 %d 个服务\n", len(services))
 	}
 
 	fmt.Println("🏁 测试完成")

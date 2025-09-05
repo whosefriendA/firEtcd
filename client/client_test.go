@@ -62,7 +62,7 @@ func TestWithPrefix(t *testing.T) {
 
 func TestClerk_Watch(t *testing.T) {
 	type fields struct {
-		servers         []*kvraft.KVClient
+		servers         []*kvraft.KVconn
 		nextSendLocalId int
 		LatestOffset    int32
 		clientId        int64
@@ -87,7 +87,7 @@ func TestClerk_Watch(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			ck := &Clerk{
+			ck := &Client{
 				servers:         tt.fields.servers,
 				nextSendLocalId: tt.fields.nextSendLocalId,
 				LatestOffset:    tt.fields.LatestOffset,
@@ -99,11 +99,11 @@ func TestClerk_Watch(t *testing.T) {
 			}
 			got, err := ck.Watch(tt.args.ctx, tt.args.key, tt.args.opts...)
 			if (err != nil) != tt.wantErr {
-				t.Errorf("Clerk.Watch() error = %v, wantErr %v", err, tt.wantErr)
+				t.Errorf("Client.Watch() error = %v, wantErr %v", err, tt.wantErr)
 				return
 			}
 			if !reflect.DeepEqual(got, tt.want) {
-				t.Errorf("Clerk.Watch() = %v, want %v", got, tt.want)
+				t.Errorf("Client.Watch() = %v, want %v", got, tt.want)
 			}
 		})
 	}
@@ -111,7 +111,7 @@ func TestClerk_Watch(t *testing.T) {
 
 func TestClerk_manageWatchStream(t *testing.T) {
 	type fields struct {
-		servers         []*kvraft.KVClient
+		servers         []*kvraft.KVconn
 		nextSendLocalId int
 		LatestOffset    int32
 		clientId        int64
@@ -133,7 +133,7 @@ func TestClerk_manageWatchStream(t *testing.T) {
 	}{}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			ck := &Clerk{
+			ck := &Client{
 				servers:         tt.fields.servers,
 				nextSendLocalId: tt.fields.nextSendLocalId,
 				LatestOffset:    tt.fields.LatestOffset,
@@ -168,7 +168,7 @@ func Test_shouldRetry(t *testing.T) {
 
 func TestClerk_watchEtcd(t *testing.T) {
 	type fields struct {
-		servers         []*kvraft.KVClient
+		servers         []*kvraft.KVconn
 		nextSendLocalId int
 		LatestOffset    int32
 		clientId        int64
@@ -183,7 +183,7 @@ func TestClerk_watchEtcd(t *testing.T) {
 	}{}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			c := &Clerk{
+			c := &Client{
 				servers:         tt.fields.servers,
 				nextSendLocalId: tt.fields.nextSendLocalId,
 				LatestOffset:    tt.fields.LatestOffset,
@@ -205,7 +205,7 @@ func TestMakeClerk(t *testing.T) {
 	tests := []struct {
 		name string
 		args args
-		want *Clerk
+		want *Client
 	}{}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -218,7 +218,7 @@ func TestMakeClerk(t *testing.T) {
 
 func TestClerk_doGetValue(t *testing.T) {
 	type fields struct {
-		servers         []*kvraft.KVClient
+		servers         []*kvraft.KVconn
 		nextSendLocalId int
 		LatestOffset    int32
 		clientId        int64
@@ -240,7 +240,7 @@ func TestClerk_doGetValue(t *testing.T) {
 	}{}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			ck := &Clerk{
+			ck := &Client{
 				servers:         tt.fields.servers,
 				nextSendLocalId: tt.fields.nextSendLocalId,
 				LatestOffset:    tt.fields.LatestOffset,
@@ -252,11 +252,11 @@ func TestClerk_doGetValue(t *testing.T) {
 			}
 			got, err := ck.doGetValue(tt.args.key, tt.args.withPrefix)
 			if (err != nil) != tt.wantErr {
-				t.Errorf("Clerk.doGetValue() error = %v, wantErr %v", err, tt.wantErr)
+				t.Errorf("Client.doGetValue() error = %v, wantErr %v", err, tt.wantErr)
 				return
 			}
 			if !reflect.DeepEqual(got, tt.want) {
-				t.Errorf("Clerk.doGetValue() = %v, want %v", got, tt.want)
+				t.Errorf("Client.doGetValue() = %v, want %v", got, tt.want)
 			}
 		})
 	}
@@ -264,7 +264,7 @@ func TestClerk_doGetValue(t *testing.T) {
 
 func TestClerk_doGetKV(t *testing.T) {
 	type fields struct {
-		servers         []*kvraft.KVClient
+		servers         []*kvraft.KVconn
 		nextSendLocalId int
 		LatestOffset    int32
 		clientId        int64
@@ -289,7 +289,7 @@ func TestClerk_doGetKV(t *testing.T) {
 	}{}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			ck := &Clerk{
+			ck := &Client{
 				servers:         tt.fields.servers,
 				nextSendLocalId: tt.fields.nextSendLocalId,
 				LatestOffset:    tt.fields.LatestOffset,
@@ -301,11 +301,11 @@ func TestClerk_doGetKV(t *testing.T) {
 			}
 			got, err := ck.doGetKV(tt.args.key, tt.args.withPrefix, tt.args.op, tt.args.pageSize, tt.args.pageIndex)
 			if (err != nil) != tt.wantErr {
-				t.Errorf("Clerk.doGetKV() error = %v, wantErr %v", err, tt.wantErr)
+				t.Errorf("Client.doGetKV() error = %v, wantErr %v", err, tt.wantErr)
 				return
 			}
 			if !reflect.DeepEqual(got, tt.want) {
-				t.Errorf("Clerk.doGetKV() = %v, want %v", got, tt.want)
+				t.Errorf("Client.doGetKV() = %v, want %v", got, tt.want)
 			}
 		})
 	}
@@ -313,7 +313,7 @@ func TestClerk_doGetKV(t *testing.T) {
 
 func TestClerk_read(t *testing.T) {
 	type fields struct {
-		servers         []*kvraft.KVClient
+		servers         []*kvraft.KVconn
 		nextSendLocalId int
 		LatestOffset    int32
 		clientId        int64
@@ -334,7 +334,7 @@ func TestClerk_read(t *testing.T) {
 	}{}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			ck := &Clerk{
+			ck := &Client{
 				servers:         tt.fields.servers,
 				nextSendLocalId: tt.fields.nextSendLocalId,
 				LatestOffset:    tt.fields.LatestOffset,
@@ -346,11 +346,11 @@ func TestClerk_read(t *testing.T) {
 			}
 			got, err := ck.read(tt.args.args)
 			if (err != nil) != tt.wantErr {
-				t.Errorf("Clerk.read() error = %v, wantErr %v", err, tt.wantErr)
+				t.Errorf("Client.read() error = %v, wantErr %v", err, tt.wantErr)
 				return
 			}
 			if !reflect.DeepEqual(got, tt.want) {
-				t.Errorf("Clerk.read() = %v, want %v", got, tt.want)
+				t.Errorf("Client.read() = %v, want %v", got, tt.want)
 			}
 		})
 	}
@@ -358,7 +358,7 @@ func TestClerk_read(t *testing.T) {
 
 func TestClerk_write(t *testing.T) {
 	type fields struct {
-		servers         []*kvraft.KVClient
+		servers         []*kvraft.KVconn
 		nextSendLocalId int
 		LatestOffset    int32
 		clientId        int64
@@ -382,7 +382,7 @@ func TestClerk_write(t *testing.T) {
 	}{}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			ck := &Clerk{
+			ck := &Client{
 				servers:         tt.fields.servers,
 				nextSendLocalId: tt.fields.nextSendLocalId,
 				LatestOffset:    tt.fields.LatestOffset,
@@ -393,7 +393,7 @@ func TestClerk_write(t *testing.T) {
 				mu:              tt.fields.mu,
 			}
 			if err := ck.write(tt.args.key, tt.args.value, tt.args.oriValue, tt.args.TTL, tt.args.op); (err != nil) != tt.wantErr {
-				t.Errorf("Clerk.write() error = %v, wantErr %v", err, tt.wantErr)
+				t.Errorf("Client.write() error = %v, wantErr %v", err, tt.wantErr)
 			}
 		})
 	}
@@ -401,7 +401,7 @@ func TestClerk_write(t *testing.T) {
 
 func TestClerk_changeNextSendId(t *testing.T) {
 	type fields struct {
-		servers         []*kvraft.KVClient
+		servers         []*kvraft.KVconn
 		nextSendLocalId int
 		LatestOffset    int32
 		clientId        int64
@@ -416,7 +416,7 @@ func TestClerk_changeNextSendId(t *testing.T) {
 	}{}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			ck := &Clerk{
+			ck := &Client{
 				servers:         tt.fields.servers,
 				nextSendLocalId: tt.fields.nextSendLocalId,
 				LatestOffset:    tt.fields.LatestOffset,
@@ -433,7 +433,7 @@ func TestClerk_changeNextSendId(t *testing.T) {
 
 func TestClerk_Put(t *testing.T) {
 	type fields struct {
-		servers         []*kvraft.KVClient
+		servers         []*kvraft.KVconn
 		nextSendLocalId int
 		LatestOffset    int32
 		clientId        int64
@@ -455,7 +455,7 @@ func TestClerk_Put(t *testing.T) {
 	}{}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			ck := &Clerk{
+			ck := &Client{
 				servers:         tt.fields.servers,
 				nextSendLocalId: tt.fields.nextSendLocalId,
 				LatestOffset:    tt.fields.LatestOffset,
@@ -466,7 +466,7 @@ func TestClerk_Put(t *testing.T) {
 				mu:              tt.fields.mu,
 			}
 			if err := ck.Put(tt.args.key, tt.args.value, tt.args.TTL); (err != nil) != tt.wantErr {
-				t.Errorf("Clerk.Put() error = %v, wantErr %v", err, tt.wantErr)
+				t.Errorf("Client.Put() error = %v, wantErr %v", err, tt.wantErr)
 			}
 		})
 	}
@@ -474,7 +474,7 @@ func TestClerk_Put(t *testing.T) {
 
 func TestClerk_Append(t *testing.T) {
 	type fields struct {
-		servers         []*kvraft.KVClient
+		servers         []*kvraft.KVconn
 		nextSendLocalId int
 		LatestOffset    int32
 		clientId        int64
@@ -496,7 +496,7 @@ func TestClerk_Append(t *testing.T) {
 	}{}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			ck := &Clerk{
+			ck := &Client{
 				servers:         tt.fields.servers,
 				nextSendLocalId: tt.fields.nextSendLocalId,
 				LatestOffset:    tt.fields.LatestOffset,
@@ -507,7 +507,7 @@ func TestClerk_Append(t *testing.T) {
 				mu:              tt.fields.mu,
 			}
 			if err := ck.Append(tt.args.key, tt.args.value, tt.args.TTL); (err != nil) != tt.wantErr {
-				t.Errorf("Clerk.Append() error = %v, wantErr %v", err, tt.wantErr)
+				t.Errorf("Client.Append() error = %v, wantErr %v", err, tt.wantErr)
 			}
 		})
 	}
@@ -515,7 +515,7 @@ func TestClerk_Append(t *testing.T) {
 
 func TestClerk_Delete(t *testing.T) {
 	type fields struct {
-		servers         []*kvraft.KVClient
+		servers         []*kvraft.KVconn
 		nextSendLocalId int
 		LatestOffset    int32
 		clientId        int64
@@ -535,7 +535,7 @@ func TestClerk_Delete(t *testing.T) {
 	}{}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			ck := &Clerk{
+			ck := &Client{
 				servers:         tt.fields.servers,
 				nextSendLocalId: tt.fields.nextSendLocalId,
 				LatestOffset:    tt.fields.LatestOffset,
@@ -546,7 +546,7 @@ func TestClerk_Delete(t *testing.T) {
 				mu:              tt.fields.mu,
 			}
 			if err := ck.Delete(tt.args.key); (err != nil) != tt.wantErr {
-				t.Errorf("Clerk.Delete() error = %v, wantErr %v", err, tt.wantErr)
+				t.Errorf("Client.Delete() error = %v, wantErr %v", err, tt.wantErr)
 			}
 		})
 	}
@@ -554,7 +554,7 @@ func TestClerk_Delete(t *testing.T) {
 
 func TestClerk_DeleteWithPrefix(t *testing.T) {
 	type fields struct {
-		servers         []*kvraft.KVClient
+		servers         []*kvraft.KVconn
 		nextSendLocalId int
 		LatestOffset    int32
 		clientId        int64
@@ -574,7 +574,7 @@ func TestClerk_DeleteWithPrefix(t *testing.T) {
 	}{}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			ck := &Clerk{
+			ck := &Client{
 				servers:         tt.fields.servers,
 				nextSendLocalId: tt.fields.nextSendLocalId,
 				LatestOffset:    tt.fields.LatestOffset,
@@ -585,7 +585,7 @@ func TestClerk_DeleteWithPrefix(t *testing.T) {
 				mu:              tt.fields.mu,
 			}
 			if err := ck.DeleteWithPrefix(tt.args.prefix); (err != nil) != tt.wantErr {
-				t.Errorf("Clerk.DeleteWithPrefix() error = %v, wantErr %v", err, tt.wantErr)
+				t.Errorf("Client.DeleteWithPrefix() error = %v, wantErr %v", err, tt.wantErr)
 			}
 		})
 	}
@@ -593,7 +593,7 @@ func TestClerk_DeleteWithPrefix(t *testing.T) {
 
 func TestClerk_CAS(t *testing.T) {
 	type fields struct {
-		servers         []*kvraft.KVClient
+		servers         []*kvraft.KVconn
 		nextSendLocalId int
 		LatestOffset    int32
 		clientId        int64
@@ -617,7 +617,7 @@ func TestClerk_CAS(t *testing.T) {
 	}{}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			ck := &Clerk{
+			ck := &Client{
 				servers:         tt.fields.servers,
 				nextSendLocalId: tt.fields.nextSendLocalId,
 				LatestOffset:    tt.fields.LatestOffset,
@@ -629,11 +629,11 @@ func TestClerk_CAS(t *testing.T) {
 			}
 			got, err := ck.CAS(tt.args.key, tt.args.origin, tt.args.dest, tt.args.TTL)
 			if (err != nil) != tt.wantErr {
-				t.Errorf("Clerk.CAS() error = %v, wantErr %v", err, tt.wantErr)
+				t.Errorf("Client.CAS() error = %v, wantErr %v", err, tt.wantErr)
 				return
 			}
 			if got != tt.want {
-				t.Errorf("Clerk.CAS() = %v, want %v", got, tt.want)
+				t.Errorf("Client.CAS() = %v, want %v", got, tt.want)
 			}
 		})
 	}
@@ -641,7 +641,7 @@ func TestClerk_CAS(t *testing.T) {
 
 func TestClerk_batchWrite(t *testing.T) {
 	type fields struct {
-		servers         []*kvraft.KVClient
+		servers         []*kvraft.KVconn
 		nextSendLocalId int
 		LatestOffset    int32
 		clientId        int64
@@ -661,7 +661,7 @@ func TestClerk_batchWrite(t *testing.T) {
 	}{}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			ck := &Clerk{
+			ck := &Client{
 				servers:         tt.fields.servers,
 				nextSendLocalId: tt.fields.nextSendLocalId,
 				LatestOffset:    tt.fields.LatestOffset,
@@ -672,7 +672,7 @@ func TestClerk_batchWrite(t *testing.T) {
 				mu:              tt.fields.mu,
 			}
 			if err := ck.BatchWrite(tt.args.p); (err != nil) != tt.wantErr {
-				t.Errorf("Clerk.BatchWrite() error = %v, wantErr %v", err, tt.wantErr)
+				t.Errorf("Client.BatchWrite() error = %v, wantErr %v", err, tt.wantErr)
 			}
 		})
 	}
@@ -680,7 +680,7 @@ func TestClerk_batchWrite(t *testing.T) {
 
 func TestClerk_Pipeline(t *testing.T) {
 	type fields struct {
-		servers         []*kvraft.KVClient
+		servers         []*kvraft.KVconn
 		nextSendLocalId int
 		LatestOffset    int32
 		clientId        int64
@@ -696,7 +696,7 @@ func TestClerk_Pipeline(t *testing.T) {
 	}{}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			ck := &Clerk{
+			ck := &Client{
 				servers:         tt.fields.servers,
 				nextSendLocalId: tt.fields.nextSendLocalId,
 				LatestOffset:    tt.fields.LatestOffset,
@@ -707,7 +707,7 @@ func TestClerk_Pipeline(t *testing.T) {
 				mu:              tt.fields.mu,
 			}
 			if got := ck.Pipeline(); !reflect.DeepEqual(got, tt.want) {
-				t.Errorf("Clerk.Pipeline() = %v, want %v", got, tt.want)
+				t.Errorf("Client.Pipeline() = %v, want %v", got, tt.want)
 			}
 		})
 	}
@@ -715,7 +715,7 @@ func TestClerk_Pipeline(t *testing.T) {
 
 func TestClerk_Get(t *testing.T) {
 	type fields struct {
-		servers         []*kvraft.KVClient
+		servers         []*kvraft.KVconn
 		nextSendLocalId int
 		LatestOffset    int32
 		clientId        int64
@@ -736,7 +736,7 @@ func TestClerk_Get(t *testing.T) {
 	}{}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			ck := &Clerk{
+			ck := &Client{
 				servers:         tt.fields.servers,
 				nextSendLocalId: tt.fields.nextSendLocalId,
 				LatestOffset:    tt.fields.LatestOffset,
@@ -748,11 +748,11 @@ func TestClerk_Get(t *testing.T) {
 			}
 			got, err := ck.Get(tt.args.key)
 			if (err != nil) != tt.wantErr {
-				t.Errorf("Clerk.Get() error = %v, wantErr %v", err, tt.wantErr)
+				t.Errorf("Client.Get() error = %v, wantErr %v", err, tt.wantErr)
 				return
 			}
 			if !reflect.DeepEqual(got, tt.want) {
-				t.Errorf("Clerk.Get() = %v, want %v", got, tt.want)
+				t.Errorf("Client.Get() = %v, want %v", got, tt.want)
 			}
 		})
 	}
@@ -760,7 +760,7 @@ func TestClerk_Get(t *testing.T) {
 
 func TestClerk_GetWithPrefix(t *testing.T) {
 	type fields struct {
-		servers         []*kvraft.KVClient
+		servers         []*kvraft.KVconn
 		nextSendLocalId int
 		LatestOffset    int32
 		clientId        int64
@@ -781,7 +781,7 @@ func TestClerk_GetWithPrefix(t *testing.T) {
 	}{}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			ck := &Clerk{
+			ck := &Client{
 				servers:         tt.fields.servers,
 				nextSendLocalId: tt.fields.nextSendLocalId,
 				LatestOffset:    tt.fields.LatestOffset,
@@ -793,11 +793,11 @@ func TestClerk_GetWithPrefix(t *testing.T) {
 			}
 			got, err := ck.GetWithPrefix(tt.args.key)
 			if (err != nil) != tt.wantErr {
-				t.Errorf("Clerk.GetWithPrefix() error = %v, wantErr %v", err, tt.wantErr)
+				t.Errorf("Client.GetWithPrefix() error = %v, wantErr %v", err, tt.wantErr)
 				return
 			}
 			if !reflect.DeepEqual(got, tt.want) {
-				t.Errorf("Clerk.GetWithPrefix() = %v, want %v", got, tt.want)
+				t.Errorf("Client.GetWithPrefix() = %v, want %v", got, tt.want)
 			}
 		})
 	}
@@ -805,7 +805,7 @@ func TestClerk_GetWithPrefix(t *testing.T) {
 
 func TestClerk_Keys(t *testing.T) {
 	type fields struct {
-		servers         []*kvraft.KVClient
+		servers         []*kvraft.KVconn
 		nextSendLocalId int
 		LatestOffset    int32
 		clientId        int64
@@ -822,7 +822,7 @@ func TestClerk_Keys(t *testing.T) {
 	}{}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			ck := &Clerk{
+			ck := &Client{
 				servers:         tt.fields.servers,
 				nextSendLocalId: tt.fields.nextSendLocalId,
 				LatestOffset:    tt.fields.LatestOffset,
@@ -834,11 +834,11 @@ func TestClerk_Keys(t *testing.T) {
 			}
 			got, err := ck.Keys()
 			if (err != nil) != tt.wantErr {
-				t.Errorf("Clerk.Keys() error = %v, wantErr %v", err, tt.wantErr)
+				t.Errorf("Client.Keys() error = %v, wantErr %v", err, tt.wantErr)
 				return
 			}
 			if !reflect.DeepEqual(got, tt.want) {
-				t.Errorf("Clerk.Keys() = %v, want %v", got, tt.want)
+				t.Errorf("Client.Keys() = %v, want %v", got, tt.want)
 			}
 		})
 	}
@@ -846,7 +846,7 @@ func TestClerk_Keys(t *testing.T) {
 
 func TestClerk_KVs(t *testing.T) {
 	type fields struct {
-		servers         []*kvraft.KVClient
+		servers         []*kvraft.KVconn
 		nextSendLocalId int
 		LatestOffset    int32
 		clientId        int64
@@ -863,7 +863,7 @@ func TestClerk_KVs(t *testing.T) {
 	}{}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			ck := &Clerk{
+			ck := &Client{
 				servers:         tt.fields.servers,
 				nextSendLocalId: tt.fields.nextSendLocalId,
 				LatestOffset:    tt.fields.LatestOffset,
@@ -875,11 +875,11 @@ func TestClerk_KVs(t *testing.T) {
 			}
 			got, err := ck.KVs()
 			if (err != nil) != tt.wantErr {
-				t.Errorf("Clerk.KVs() error = %v, wantErr %v", err, tt.wantErr)
+				t.Errorf("Client.KVs() error = %v, wantErr %v", err, tt.wantErr)
 				return
 			}
 			if !reflect.DeepEqual(got, tt.want) {
-				t.Errorf("Clerk.KVs() = %v, want %v", got, tt.want)
+				t.Errorf("Client.KVs() = %v, want %v", got, tt.want)
 			}
 		})
 	}
@@ -887,7 +887,7 @@ func TestClerk_KVs(t *testing.T) {
 
 func TestClerk_KeysWithPage(t *testing.T) {
 	type fields struct {
-		servers         []*kvraft.KVClient
+		servers         []*kvraft.KVconn
 		nextSendLocalId int
 		LatestOffset    int32
 		clientId        int64
@@ -909,7 +909,7 @@ func TestClerk_KeysWithPage(t *testing.T) {
 	}{}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			ck := &Clerk{
+			ck := &Client{
 				servers:         tt.fields.servers,
 				nextSendLocalId: tt.fields.nextSendLocalId,
 				LatestOffset:    tt.fields.LatestOffset,
@@ -921,11 +921,11 @@ func TestClerk_KeysWithPage(t *testing.T) {
 			}
 			got, err := ck.KeysWithPage(tt.args.pageSize, tt.args.pageIndex)
 			if (err != nil) != tt.wantErr {
-				t.Errorf("Clerk.KeysWithPage() error = %v, wantErr %v", err, tt.wantErr)
+				t.Errorf("Client.KeysWithPage() error = %v, wantErr %v", err, tt.wantErr)
 				return
 			}
 			if !reflect.DeepEqual(got, tt.want) {
-				t.Errorf("Clerk.KeysWithPage() = %v, want %v", got, tt.want)
+				t.Errorf("Client.KeysWithPage() = %v, want %v", got, tt.want)
 			}
 		})
 	}
@@ -933,7 +933,7 @@ func TestClerk_KeysWithPage(t *testing.T) {
 
 func TestClerk_KVsWithPage(t *testing.T) {
 	type fields struct {
-		servers         []*kvraft.KVClient
+		servers         []*kvraft.KVconn
 		nextSendLocalId int
 		LatestOffset    int32
 		clientId        int64
@@ -955,7 +955,7 @@ func TestClerk_KVsWithPage(t *testing.T) {
 	}{}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			ck := &Clerk{
+			ck := &Client{
 				servers:         tt.fields.servers,
 				nextSendLocalId: tt.fields.nextSendLocalId,
 				LatestOffset:    tt.fields.LatestOffset,
@@ -967,11 +967,11 @@ func TestClerk_KVsWithPage(t *testing.T) {
 			}
 			got, err := ck.KVsWithPage(tt.args.pageSize, tt.args.pageIndex)
 			if (err != nil) != tt.wantErr {
-				t.Errorf("Clerk.KVsWithPage() error = %v, wantErr %v", err, tt.wantErr)
+				t.Errorf("Client.KVsWithPage() error = %v, wantErr %v", err, tt.wantErr)
 				return
 			}
 			if !reflect.DeepEqual(got, tt.want) {
-				t.Errorf("Clerk.KVsWithPage() = %v, want %v", got, tt.want)
+				t.Errorf("Client.KVsWithPage() = %v, want %v", got, tt.want)
 			}
 		})
 	}
@@ -979,7 +979,7 @@ func TestClerk_KVsWithPage(t *testing.T) {
 
 func TestClerk_Lock(t *testing.T) {
 	type fields struct {
-		servers         []*kvraft.KVClient
+		servers         []*kvraft.KVconn
 		nextSendLocalId int
 		LatestOffset    int32
 		clientId        int64
@@ -1001,7 +1001,7 @@ func TestClerk_Lock(t *testing.T) {
 	}{}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			ck := &Clerk{
+			ck := &Client{
 				servers:         tt.fields.servers,
 				nextSendLocalId: tt.fields.nextSendLocalId,
 				LatestOffset:    tt.fields.LatestOffset,
@@ -1013,11 +1013,11 @@ func TestClerk_Lock(t *testing.T) {
 			}
 			gotId, err := ck.Lock(tt.args.key, tt.args.TTL)
 			if (err != nil) != tt.wantErr {
-				t.Errorf("Clerk.Lock() error = %v, wantErr %v", err, tt.wantErr)
+				t.Errorf("Client.Lock() error = %v, wantErr %v", err, tt.wantErr)
 				return
 			}
 			if gotId != tt.wantId {
-				t.Errorf("Clerk.Lock() = %v, want %v", gotId, tt.wantId)
+				t.Errorf("Client.Lock() = %v, want %v", gotId, tt.wantId)
 			}
 		})
 	}
@@ -1025,7 +1025,7 @@ func TestClerk_Lock(t *testing.T) {
 
 func TestClerk_Unlock(t *testing.T) {
 	type fields struct {
-		servers         []*kvraft.KVClient
+		servers         []*kvraft.KVconn
 		nextSendLocalId int
 		LatestOffset    int32
 		clientId        int64
@@ -1047,7 +1047,7 @@ func TestClerk_Unlock(t *testing.T) {
 	}{}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			ck := &Clerk{
+			ck := &Client{
 				servers:         tt.fields.servers,
 				nextSendLocalId: tt.fields.nextSendLocalId,
 				LatestOffset:    tt.fields.LatestOffset,
@@ -1059,11 +1059,11 @@ func TestClerk_Unlock(t *testing.T) {
 			}
 			got, err := ck.Unlock(tt.args.key, tt.args.id)
 			if (err != nil) != tt.wantErr {
-				t.Errorf("Clerk.Unlock() error = %v, wantErr %v", err, tt.wantErr)
+				t.Errorf("Client.Unlock() error = %v, wantErr %v", err, tt.wantErr)
 				return
 			}
 			if got != tt.want {
-				t.Errorf("Clerk.Unlock() = %v, want %v", got, tt.want)
+				t.Errorf("Client.Unlock() = %v, want %v", got, tt.want)
 			}
 		})
 	}
@@ -1071,7 +1071,7 @@ func TestClerk_Unlock(t *testing.T) {
 
 func TestClerk_WatchDog(t *testing.T) {
 	type fields struct {
-		servers         []*kvraft.KVClient
+		servers         []*kvraft.KVconn
 		nextSendLocalId int
 		LatestOffset    int32
 		clientId        int64
@@ -1104,7 +1104,7 @@ func TestClerk_WatchDog(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			ck := &Clerk{
+			ck := &Client{
 				servers:         tt.fields.servers,
 				nextSendLocalId: tt.fields.nextSendLocalId,
 				LatestOffset:    tt.fields.LatestOffset,
@@ -1117,14 +1117,14 @@ func TestClerk_WatchDog(t *testing.T) {
 
 			cancelFunc := ck.WatchDog(tt.args.key, tt.args.value)
 			if cancelFunc == nil {
-				t.Errorf("Clerk.WatchDog() returned nil cancelFunc")
+				t.Errorf("Client.WatchDog() returned nil cancelFunc")
 				return
 			}
 
 			// 安全地调用一下，确认不会 panic
 			defer func() {
 				if r := recover(); r != nil {
-					t.Errorf("Clerk.WatchDog() cancelFunc panicked: %v", r)
+					t.Errorf("Client.WatchDog() cancelFunc panicked: %v", r)
 				}
 			}()
 			cancelFunc() // 调用返回的 cancel 函数

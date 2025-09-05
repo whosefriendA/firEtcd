@@ -15,7 +15,7 @@ import (
 type Pipe struct {
 	Ops  []raft.Op
 	size int
-	//ck   *Clerk
+	//ck   *Client
 	ck BatchWriter
 }
 
@@ -67,8 +67,6 @@ func (p *Pipe) Put(key string, value []byte, TTL time.Duration) error {
 	}
 	if TTL != 0 {
 		op.Entry.DeadTime = time.Now().Add(TTL).UnixMilli()
-		// naive per-op lease grant: the actual client-side plumping may batch later
-		// This requires the concrete Clerk behind BatchWriter to handle lease creation when executing.
 	}
 	return p.append(op)
 }
@@ -95,7 +93,7 @@ func (p *Pipe) append(op raft.Op) error {
 }
 
 func (p *Pipe) Exec() error {
-	if len(p.Ops) == 0 { // 假设字段是公开的 Ops
+	if len(p.Ops) == 0 { 
 		return nil
 	}
 
@@ -106,6 +104,6 @@ func NewPipe(ck BatchWriter) *Pipe {
 	return &Pipe{
 		ck:   ck,
 		Ops:  make([]raft.Op, 0),
-		size: 0, // 根据你的实际实现初始化
+		size: 0, 
 	}
 }

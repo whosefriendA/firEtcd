@@ -20,10 +20,8 @@ type ServiceDiscoveryHandler struct {
 func NewServiceDiscoveryHandler(ck client.KVStore) *ServiceDiscoveryHandler {
 	registry := client.NewServiceRegistryV3(ck)
 
-	// 检查 ck 是否实现了 Watcher 接口
 	watcher, ok := ck.(client.Watcher)
 	if !ok {
-		// 如果 ck 没有实现 Watcher 接口，创建一个空的实现
 		watcher = &noopWatcher{}
 	}
 
@@ -38,7 +36,6 @@ func NewServiceDiscoveryHandler(ck client.KVStore) *ServiceDiscoveryHandler {
 type noopWatcher struct{}
 
 func (nw *noopWatcher) Watch(ctx context.Context, key string, opts ...client.WatchOption) (<-chan *client.WatchEvent, error) {
-	// 返回一个空的 channel
 	ch := make(chan *client.WatchEvent)
 	close(ch)
 	return ch, nil
@@ -88,18 +85,15 @@ func (h *ServiceDiscoveryHandler) RegisterService(w http.ResponseWriter, r *http
 		return
 	}
 
-	// 验证请求参数
 	if req.ServiceName == "" || req.ServiceID == "" || req.Endpoint == "" {
 		http.Error(w, "Missing required fields", http.StatusBadRequest)
 		return
 	}
 
-	// 设置默认 TTL
 	if req.TTL <= 0 {
 		req.TTL = 30 // 默认 30 秒
 	}
 
-	// 注册服务
 	leaseID, err := h.registry.Register(
 		context.Background(),
 		req.ServiceName,
@@ -132,7 +126,6 @@ func (h *ServiceDiscoveryHandler) DeregisterService(w http.ResponseWriter, r *ht
 		return
 	}
 
-	// 从 URL 参数获取服务信息
 	serviceName := r.URL.Query().Get("service_name")
 	serviceID := r.URL.Query().Get("service_id")
 
@@ -141,7 +134,6 @@ func (h *ServiceDiscoveryHandler) DeregisterService(w http.ResponseWriter, r *ht
 		return
 	}
 
-	// 注销服务
 	err := h.registry.Deregister(context.Background(), serviceName, serviceID)
 
 	response := RegisterServiceResponse{}
@@ -172,7 +164,6 @@ func (h *ServiceDiscoveryHandler) GetServices(w http.ResponseWriter, r *http.Req
 		return
 	}
 
-	// 获取服务列表
 	services, err := h.discovery.Get(context.Background(), serviceName)
 
 	response := ServiceListResponse{}
@@ -203,7 +194,6 @@ func (h *ServiceDiscoveryHandler) HealthCheck(w http.ResponseWriter, r *http.Req
 		return
 	}
 
-	// 执行健康检查
 	health, err := h.discovery.HealthCheck(context.Background(), serviceName)
 
 	response := HealthCheckResponse{}
@@ -234,10 +224,8 @@ func (h *ServiceDiscoveryHandler) LoadBalancer(w http.ResponseWriter, r *http.Re
 		return
 	}
 
-	// 创建负载均衡器
 	lb := client.NewLoadBalancer(h.discovery)
 
-	// 获取服务实例
 	instance, err := lb.GetInstance(context.Background(), serviceName)
 
 	response := ServiceListResponse{}
@@ -274,7 +262,6 @@ func (h *ServiceDiscoveryHandler) KeepAlive(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	// 执行续约
 	err = h.registry.KeepAlive(context.Background(), leaseID)
 
 	response := RegisterServiceResponse{}
@@ -294,21 +281,15 @@ func (h *ServiceDiscoveryHandler) KeepAlive(w http.ResponseWriter, r *http.Reque
 
 // RegisterRoutes 注册服务发现路由
 func (h *ServiceDiscoveryHandler) RegisterRoutes(mux *http.ServeMux, baseURL string) {
-	// 服务注册
 	mux.HandleFunc("POST "+baseURL+"/services/register", h.RegisterService)
 
-	// 服务注销
 	mux.HandleFunc("DELETE "+baseURL+"/services/deregister", h.DeregisterService)
 
-	// 获取服务列表
 	mux.HandleFunc("GET "+baseURL+"/services", h.GetServices)
 
-	// 健康检查
 	mux.HandleFunc("GET "+baseURL+"/services/health", h.HealthCheck)
 
-	// 负载均衡
 	mux.HandleFunc("GET "+baseURL+"/services/loadbalancer", h.LoadBalancer)
 
-	// 续约
 	mux.HandleFunc("POST "+baseURL+"/services/keepalive", h.KeepAlive)
 }

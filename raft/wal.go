@@ -1,5 +1,5 @@
 // Package wal provides a simplified Write-Ahead Log implementation.
-package wal
+package raft
 
 import (
 	"bufio"
@@ -56,11 +56,14 @@ func Create(dir string) (*WAL, error) {
 
 // Open opens the WAL in the given directory.
 func Open(dir string) (*WAL, error) {
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return nil, err
+	}
+
 	names, err := listLogFiles(dir)
 	if err != nil {
 		return nil, err
 	}
-
 	if len(names) == 0 {
 		// Create the first log file.
 		return newLogFile(dir, 1)
@@ -217,27 +220,6 @@ func (w *WAL) Close() error {
 	return err
 }
 
-// Size returns the total size of all WAL files in bytes.
-func (w *WAL) Size() int64 {
-	names, err := listLogFiles(w.dir)
-	if err != nil {
-		return 0
-	}
-	var totalSize int64
-	for _, name := range names {
-		info, err := os.Stat(filepath.Join(w.dir, name))
-		if err == nil {
-			totalSize += info.Size()
-		}
-	}
-	return totalSize
-}
-
-// Dir returns the WAL directory path.
-func (w *WAL) Dir() string {
-	return w.dir
-}
-
 // listLogFiles finds all .wal files in a directory and returns them sorted.
 func listLogFiles(dir string) ([]string, error) {
 	files, err := os.ReadDir(dir)
@@ -256,4 +238,19 @@ func listLogFiles(dir string) ([]string, error) {
 	}
 	sort.Strings(names)
 	return names, nil
+}
+
+func (w *WAL) Size() int {
+	names, err := listLogFiles(w.dir)
+	if err != nil {
+		return 0
+	}
+	var totalSize int64
+	for _, name := range names {
+		info, err := os.Stat(filepath.Join(w.dir, name))
+		if err == nil {
+			totalSize += info.Size()
+		}
+	}
+	return int(totalSize)
 }

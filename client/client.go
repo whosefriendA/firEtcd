@@ -24,9 +24,9 @@ import (
 
 var pipeLimit int = 1024 * 4000
 
-type Clerk struct {
-	servers []*kvraft.KVClient
-	// You will have to modify this struct.
+type Client struct {
+	servers []*kvraft.KVconn
+
 	nextSendLocalId int
 	LatestOffset    int32
 	clientId        int64
@@ -71,7 +71,7 @@ const (
 	watchEventBufferSize     = 100 // Buffer size for the event channel returned to the application
 )
 
-func (ck *Clerk) Watch(ctx context.Context, key string, opts ...WatchOption) (<-chan *WatchEvent, error) {
+func (ck *Client) Watch(ctx context.Context, key string, opts ...WatchOption) (<-chan *WatchEvent, error) {
 	watchReq := &pb.WatchRequest{
 		Key:              []byte(key),
 		IsPrefix:         false, // Default, overridden by WithPrefix
@@ -85,16 +85,10 @@ func (ck *Clerk) Watch(ctx context.Context, key string, opts ...WatchOption) (<-
 
 	go ck.manageWatchStream(ctx, key, watchReq, eventChan)
 
-	// Note: This Watch() returns immediately. Errors during stream establishment
-	// or subsequent errors will result in eventChan being closed.
-	// If an immediate, unrecoverable error during the *very first* connection attempt
-	// is desired to be returned directly from Watch(), the initial connection logic
-	// would need to be partially synchronous here, which adds complexity.
-	// The current model (async goroutine, errors close channel) is common for watches.
 	return eventChan, nil
 }
 
-func (ck *Clerk) manageWatchStream(ctx context.Context, watchKeyStr string, req *pb.WatchRequest, eventChan chan<- *WatchEvent) {
+func (ck *Client) manageWatchStream(ctx context.Context, watchKeyStr string, req *pb.WatchRequest, eventChan chan<- *WatchEvent) {
 	defer close(eventChan)
 
 	currentBackoff := watchRetryInitialBackoff
@@ -110,9 +104,8 @@ func (ck *Clerk) manageWatchStream(ctx context.Context, watchKeyStr string, req 
 
 		var stream pb.Kvserver_WatchClient
 		var err error
-		var currentKvClient *kvraft.KVClient
+		var currentKvClient *kvraft.KVconn
 
-		// --- Begin critical section for server selection ---
 		ck.mu.Lock()
 		if serverIdx == -1 { // First attempt or after a leaderless error
 			serverIdx = ck.nextSendLocalId
@@ -129,7 +122,6 @@ func (ck *Clerk) manageWatchStream(ctx context.Context, watchKeyStr string, req 
 			}
 		}
 		ck.mu.Unlock()
-		// --- End critical section for server selection ---
 
 		if currentKvClient == nil {
 			//firlog.Logger.Warnf("Watch for key '%s': No valid servers found, retrying after backoff.", watchKeyStr)
@@ -167,7 +159,7 @@ func (ck *Clerk) manageWatchStream(ctx context.Context, watchKeyStr string, req 
 			resp, recvErr := stream.Recv()
 			if recvErr != nil {
 				if recvErr == io.EOF {
-					firlog.Logger.Errorf("Clerk Watch: FAILED to receive from gRPC stream. Error: %v", recvErr)
+					firlog.Logger.Errorf("Client Watch: FAILED to receive from gRPC stream. Error: %v", recvErr)
 					//firlog.Logger.Infof("Watch stream for key '%s' closed by server %s (EOF).", watchKeyStr, currentKvClient.Addr)
 				} else {
 					//firlog.Logger.Warnf("Watch stream for key '%s' on server %s Recv error: %v.", watchKeyStr, currentKvClient.Addr, recvErr)
@@ -187,7 +179,7 @@ func (ck *Clerk) manageWatchStream(ctx context.Context, watchKeyStr string, req 
 				}
 				goto handle_error_and_retry // Break recv_loop and go to retry logic
 			} else {
-				firlog.Logger.Infof("Clerk Watch: SUCCESSFULLY received response from gRPC. Key: %s", string(resp.Key))
+				firlog.Logger.Infof("Client Watch: SUCCESSFULLY received response from gRPC. Key: %s", string(resp.Key))
 			}
 
 			event := (*WatchEvent)(resp)
@@ -231,8 +223,7 @@ func (ck *Clerk) manageWatchStream(ctx context.Context, watchKeyStr string, req 
 	} // End of main retry loop
 }
 
-// Helper to check if a gRPC error code suggests a retry
-// This is a simplified example; more sophisticated logic might be needed.
+// shouldRetry checks if a gRPC error code suggests a retry.
 func shouldRetry(code codes.Code) bool {
 	switch code {
 	case codes.Unavailable, codes.DeadlineExceeded, codes.ResourceExhausted, codes.Internal, codes.Unknown:
@@ -243,15 +234,15 @@ func shouldRetry(code codes.Code) bool {
 		return false
 	}
 }
-func (c *Clerk) watchEtcd() {
+func (c *Client) watchEtcd() {
 	for {
 		for i, kvclient := range c.servers {
 			if !kvclient.Valid {
-				fmt.Printf("Clerk: try connect to etcd %s\n", c.conf.EtcdAddrs[i])
+				fmt.Printf("Client: try connect to etcd %s\n", c.conf.EtcdAddrs[i])
 				if kvclient.Realconn != nil {
 					kvclient.Realconn.Close()
 				}
-				k := kvraft.NewKvClient(c.conf.EtcdAddrs[i], c.conf.TLS)
+				k := kvraft.NewKvConn(c.conf.EtcdAddrs[i], c.conf.TLS)
 				if k != nil {
 					c.servers[i] = k
 					// firLog.Logger.Warnf("update etcd server[%d] addr[%s]", i, c.conf.EtcdAddrs[i])
@@ -262,16 +253,15 @@ func (c *Clerk) watchEtcd() {
 	}
 }
 
-func MakeClerk(conf firconfig.Clerk) *Clerk {
-	ck := new(Clerk)
+func MakeClerk(conf firconfig.Clerk) *Client {
+	ck := new(Client)
 	ck.conf = conf
-	// You'll have to add code here
-	ck.servers = make([]*kvraft.KVClient, len(conf.EtcdAddrs))
+	ck.servers = make([]*kvraft.KVconn, len(conf.EtcdAddrs))
 	for i := range ck.servers {
-		ck.servers[i] = new(kvraft.KVClient)
+		ck.servers[i] = new(kvraft.KVconn)
 		ck.servers[i].Valid = false
 	}
-	fmt.Printf("Clerk etcd addrs: %+v\n", conf.EtcdAddrs)
+	fmt.Printf("Client etcd addrs: %+v\n", conf.EtcdAddrs)
 	ck.nextSendLocalId = int(nrand() % int64(len(conf.EtcdAddrs)))
 	ck.LatestOffset = 1
 	ck.clientId = nrand()
@@ -286,7 +276,7 @@ func MakeClerk(conf firconfig.Clerk) *Clerk {
 	return ck
 }
 
-func (ck *Clerk) doGetValue(key string, withPrefix bool) ([][]byte, error) {
+func (ck *Client) doGetValue(key string, withPrefix bool) ([][]byte, error) {
 	args := pb.GetArgs{
 		Key:          key,
 		ClientId:     ck.clientId,
@@ -297,7 +287,7 @@ func (ck *Clerk) doGetValue(key string, withPrefix bool) ([][]byte, error) {
 	return ck.read(&args)
 }
 
-func (ck *Clerk) doGetKV(key string, withPrefix bool, op pb.OpType, pageSize, pageIndex int) ([]common.Pair, error) {
+func (ck *Client) doGetKV(key string, withPrefix bool, op pb.OpType, pageSize, pageIndex int) ([]common.Pair, error) {
 	args := pb.GetArgs{
 		Key:          key,
 		ClientId:     ck.clientId,
@@ -319,19 +309,7 @@ func (ck *Clerk) doGetKV(key string, withPrefix bool, op pb.OpType, pageSize, pa
 	return rets, nil
 }
 
-// fetch the current value for a key.
-// returns "" if the key does not exist.
-// keeps trying forever in the face of all other errors.
-//
-// you can send an RPC with code like this:
-// ok := ck.servers[i].Call("KVServer.Get", &args, &reply)
-//
-// the types of args and reply (including whether they are pointers)
-// must match the declared types of the RPC handler function's
-// arguments. and reply must be passed as a pointer.
-
-func (ck *Clerk) read(args *pb.GetArgs) ([][]byte, error) {
-	// You will have to modify this function.
+func (ck *Client) read(args *pb.GetArgs) ([][]byte, error) {
 	ck.mu.Lock()
 	defer ck.mu.Unlock()
 	totalCount := 0
@@ -417,17 +395,7 @@ func (ck *Clerk) read(args *pb.GetArgs) ([][]byte, error) {
 	}
 }
 
-// shared by Put and Append.
-//
-// you can send an RPC with code like this:
-// ok := ck.servers[i].Call("KVServer."+op, &args, &reply)
-//
-// the types of args and reply (including whether they are pointers)
-// must match the declared types of the RPC handler function's
-// arguments. and reply must be passed as a pointer.
-func (ck *Clerk) write(key string, value, oriValue []byte, TTL time.Duration, op int32) error {
-	// You will have to modify this function.
-
+func (ck *Client) write(key string, value, oriValue []byte, TTL time.Duration, op int32) error {
 	ck.mu.Lock()
 	defer ck.mu.Unlock()
 	args := pb.PutAppendArgs{
@@ -536,27 +504,27 @@ func (ck *Clerk) write(key string, value, oriValue []byte, TTL time.Duration, op
 	}
 }
 
-func (ck *Clerk) changeNextSendId() {
+func (ck *Client) changeNextSendId() {
 	ck.nextSendLocalId = (ck.nextSendLocalId + 1) % len(ck.servers)
 }
 
-func (ck *Clerk) Put(key string, value []byte, TTL time.Duration) error {
+func (ck *Client) Put(key string, value []byte, TTL time.Duration) error {
 	return ck.write(key, value, nil, TTL, int32(pb.OpType_PutT))
 }
 
-func (ck *Clerk) Append(key string, value []byte, TTL time.Duration) error {
+func (ck *Client) Append(key string, value []byte, TTL time.Duration) error {
 	return ck.write(key, value, nil, TTL, int32(pb.OpType_AppendT))
 }
 
-func (ck *Clerk) Delete(key string) error {
+func (ck *Client) Delete(key string) error {
 	return ck.write(key, nil, nil, 0, int32(pb.OpType_DelT))
 }
 
-func (ck *Clerk) DeleteWithPrefix(prefix string) error {
+func (ck *Client) DeleteWithPrefix(prefix string) error {
 	return ck.write(prefix, nil, nil, 0, int32(pb.OpType_DelWithPrefix))
 }
 
-func (ck *Clerk) CAS(key string, origin, dest []byte, TTL time.Duration) (bool, error) {
+func (ck *Client) CAS(key string, origin, dest []byte, TTL time.Duration) (bool, error) {
 	err := ck.write(key, dest, origin, TTL, int32(pb.OpType_CAST))
 	if err != nil {
 		if err == kvraft.ErrCASFaild {
@@ -567,7 +535,7 @@ func (ck *Clerk) CAS(key string, origin, dest []byte, TTL time.Duration) (bool, 
 	return true, nil
 }
 
-func (ck *Clerk) BatchWrite(p *Pipe) error {
+func (ck *Client) BatchWrite(p *Pipe) error {
 	// Pre-grant leases for ops with DeadTime>0
 	for i := range p.Ops {
 		op := &p.Ops[i]
@@ -609,13 +577,13 @@ func (ck *Clerk) BatchWrite(p *Pipe) error {
 	return ck.write("", p.Marshal(), nil, 0, int32(pb.OpType_BatchT))
 }
 
-func (ck *Clerk) Pipeline() *Pipe {
+func (ck *Client) Pipeline() *Pipe {
 	return &Pipe{
 		ck: ck,
 	}
 }
 
-func (ck *Clerk) Get(key string) ([]byte, error) {
+func (ck *Client) Get(key string) ([]byte, error) {
 	r, err := ck.doGetValue(key, false)
 	if err != nil {
 		return nil, err
@@ -626,7 +594,7 @@ func (ck *Clerk) Get(key string) ([]byte, error) {
 	return nil, kvraft.ErrNil
 }
 
-func (ck *Clerk) GetWithPrefix(key string) ([][]byte, error) {
+func (ck *Client) GetWithPrefix(key string) ([][]byte, error) {
 	r, err := ck.doGetValue(key, true)
 	if err != nil {
 		return nil, err
@@ -637,34 +605,31 @@ func (ck *Clerk) GetWithPrefix(key string) ([][]byte, error) {
 	return nil, kvraft.ErrNil
 }
 
-func (ck *Clerk) Keys() ([]common.Pair, error) {
+func (ck *Client) Keys() ([]common.Pair, error) {
 	return ck.doGetKV("", true, pb.OpType_GetKeys, 0, 0)
 }
 
-func (ck *Clerk) KVs() ([]common.Pair, error) {
+func (ck *Client) KVs() ([]common.Pair, error) {
 	return ck.doGetKV("", true, pb.OpType_GetKVs, 0, 0)
 }
 
-func (ck *Clerk) KeysWithPage(pageSize, pageIndex int) ([]common.Pair, error) {
+func (ck *Client) KeysWithPage(pageSize, pageIndex int) ([]common.Pair, error) {
 	return ck.doGetKV("", true, pb.OpType_GetKeys, pageSize, pageIndex)
 }
 
-func (ck *Clerk) KVsWithPage(pageSize, pageIndex int) ([]common.Pair, error) {
+func (ck *Client) KVsWithPage(pageSize, pageIndex int) ([]common.Pair, error) {
 	return ck.doGetKV("", true, pb.OpType_GetKVs, pageSize, pageIndex)
 }
 
-func (ck *Clerk) Lock(key string, TTL time.Duration) (id string, err error) {
-	// 使用 Lease 机制实现分布式锁
+func (ck *Client) Lock(key string, TTL time.Duration) (id string, err error) {
 	leaseID, err := ck.LeaseGrant(TTL)
 	if err != nil {
 		return "", err
 	}
 
-	// 使用 CAS 确保原子性获取锁
 	leaseIDStr := strconv.FormatInt(leaseID, 10)
 	ok, err := ck.CAS(key, nil, []byte(leaseIDStr), 0)
 	if err != nil || !ok {
-		// 获取锁失败，清理租约
 		ck.LeaseRevoke(leaseID)
 		return "", err
 	}
@@ -672,14 +637,12 @@ func (ck *Clerk) Lock(key string, TTL time.Duration) (id string, err error) {
 	return leaseIDStr, nil
 }
 
-func (ck *Clerk) Unlock(key, id string) (bool, error) {
-	// 验证锁 ID 并释放
+func (ck *Client) Unlock(key, id string) (bool, error) {
 	ok, err := ck.CAS(key, []byte(id), nil, 0)
 	if err != nil || !ok {
 		return false, err
 	}
 
-	// 释放成功后，撤销租约
 	leaseID, _ := strconv.ParseInt(id, 10, 64)
 	if leaseID > 0 {
 		ck.LeaseRevoke(leaseID)
@@ -689,13 +652,12 @@ func (ck *Clerk) Unlock(key, id string) (bool, error) {
 }
 
 // LockWithKeepAlive 获取锁并自动续约，返回取消函数
-func (ck *Clerk) LockWithKeepAlive(key string, TTL time.Duration) (id string, cancel func(), err error) {
+func (ck *Client) LockWithKeepAlive(key string, TTL time.Duration) (id string, cancel func(), err error) {
 	leaseID, err := ck.LeaseGrant(TTL)
 	if err != nil {
 		return "", nil, err
 	}
 
-	// 使用 CAS 确保原子性获取锁
 	leaseIDStr := strconv.FormatInt(leaseID, 10)
 	ok, err := ck.CAS(key, nil, []byte(leaseIDStr), 0)
 	if err != nil || !ok {
@@ -703,18 +665,15 @@ func (ck *Clerk) LockWithKeepAlive(key string, TTL time.Duration) (id string, ca
 		return "", nil, err
 	}
 
-	// 启动自动续约
 	cancelFunc := ck.AutoKeepAlive(leaseID, TTL/3)
 
-	// 返回取消函数，调用者可以手动停止续约
 	return leaseIDStr, func() {
 		cancelFunc()
 		ck.Unlock(key, leaseIDStr)
 	}, nil
 }
 
-// Lease convenience methods
-func (ck *Clerk) LeaseGrant(ttl time.Duration) (int64, error) {
+func (ck *Client) LeaseGrant(ttl time.Duration) (int64, error) {
 	// find a valid server
 	validCount := 0
 	for !ck.servers[ck.nextSendLocalId].Valid {
@@ -732,7 +691,7 @@ func (ck *Clerk) LeaseGrant(ttl time.Duration) (int64, error) {
 	return lr.ID, nil
 }
 
-func (ck *Clerk) LeaseRevoke(leaseID int64) error {
+func (ck *Client) LeaseRevoke(leaseID int64) error {
 	validCount := 0
 	for !ck.servers[ck.nextSendLocalId].Valid {
 		ck.changeNextSendId()
@@ -746,7 +705,7 @@ func (ck *Clerk) LeaseRevoke(leaseID int64) error {
 	return err
 }
 
-func (ck *Clerk) LeaseTimeToLive(leaseID int64, withKeys bool) (int64, []string, error) {
+func (ck *Client) LeaseTimeToLive(leaseID int64, withKeys bool) (int64, []string, error) {
 	validCount := 0
 	for !ck.servers[ck.nextSendLocalId].Valid {
 		ck.changeNextSendId()
@@ -764,7 +723,7 @@ func (ck *Clerk) LeaseTimeToLive(leaseID int64, withKeys bool) (int64, []string,
 }
 
 // AutoKeepAlive starts background renewal for a lease, returns cancel function
-func (ck *Clerk) AutoKeepAlive(leaseID int64, interval time.Duration) (cancel func()) {
+func (ck *Client) AutoKeepAlive(leaseID int64, interval time.Duration) (cancel func()) {
 	flag := new(bool)
 	*flag = false
 	go func() {

@@ -12,7 +12,7 @@ import (
 	clientv3 "go.etcd.io/etcd/client/v3"
 )
 
-var ck *client.Clerk
+var ck *client.Client
 
 func init() {
 	conf := firconfig.Clerk{}

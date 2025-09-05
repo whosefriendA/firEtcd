@@ -12,7 +12,7 @@ import (
 )
 
 type Gateway struct {
-	ck   *client.Clerk
+	ck   *client.Client
 	conf firconfig.Gateway
 }
 
@@ -23,8 +23,6 @@ func NewGateway(conf firconfig.Gateway) *Gateway {
 	}
 }
 
-// realurl = baseUrl + '/keys' | '/put' act...
-// default baseUrl = '/firEtcd'
 func (g *Gateway) Run() error {
 	mux := http.NewServeMux()
 
@@ -40,13 +38,11 @@ func (g *Gateway) Run() error {
 
 	var handler http.Handler = mux
 	handler = InstantLogger(handler)
-	// 加载TLS证书
 	certificate, err := tls.LoadX509KeyPair("/home/wanggang/firEtcd/pkg/tls/certs/gateway.crt", "/home/wanggang/firEtcd/pkg/tls/certs/gateway.key")
 	if err != nil {
 		firlog.Logger.Fatalf("无法加载网关证书: %v", err)
 	}
 
-	// 创建证书池并添加CA证书
 	certPool := x509.NewCertPool()
 	ca, err := ioutil.ReadFile("/home/wanggang/firEtcd/pkg/tls/certs/ca.crt")
 	if err != nil {
@@ -56,7 +52,6 @@ func (g *Gateway) Run() error {
 		firlog.Logger.Fatal("无法将CA证书添加到证书池")
 	}
 
-	// 配置TLS
 	tlsConfig := &tls.Config{
 		Certificates: []tls.Certificate{certificate},
 		ClientCAs:    certPool,
@@ -64,13 +59,11 @@ func (g *Gateway) Run() error {
 		MinVersion:   tls.VersionTLS12,
 	}
 
-	// 创建TLS服务器
 	server := &http.Server{
 		Addr:      g.conf.Port,
 		Handler:   handler,
 		TLSConfig: tlsConfig,
 	}
 
-	// 启动TLS服务器
 	return server.ListenAndServeTLS("", "")
 }

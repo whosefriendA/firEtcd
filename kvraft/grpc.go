@@ -13,25 +13,23 @@ import (
 	"google.golang.org/grpc/credentials"
 )
 
-type KVClient struct {
+type KVconn struct {
 	Valid    bool
 	Conn     pb.KvserverClient
 	Realconn *grpc.ClientConn
 }
 
-// NewKvClient 创建新的KV客户端，支持TLS配置
-func NewKvClient(addr string, tlsConfig *firconfig.TLSConfig) *KVClient {
+// NewKvConn 创建新的KV客户端，支持TLS配置
+func NewKvConn(addr string, tlsConfig *firconfig.TLSConfig) *KVconn {
 	var creds credentials.TransportCredentials
 
 	if tlsConfig != nil && tlsConfig.IsEnabled() {
-		// 加载客户端证书
 		certificate, err := tls.LoadX509KeyPair(tlsConfig.CertFile, tlsConfig.KeyFile)
 		if err != nil {
 			firlog.Logger.Errorf("无法加载客户端证书: %v", err)
 			return nil
 		}
 
-		// 创建证书池并添加CA证书
 		certPool := x509.NewCertPool()
 		ca, err := ioutil.ReadFile(tlsConfig.CAFile)
 		if err != nil {
@@ -43,23 +41,19 @@ func NewKvClient(addr string, tlsConfig *firconfig.TLSConfig) *KVClient {
 			return nil
 		}
 
-		// 配置TLS
 		tlsClientConfig := &tls.Config{
 			Certificates:       []tls.Certificate{certificate},
 			RootCAs:            certPool,
-			ServerName:         "localhost", // 验证服务器主机名
+			ServerName:         "localhost",
 			MinVersion:         tls.VersionTLS12,
-			InsecureSkipVerify: true, // 临时跳过主机名验证，用于测试
+			InsecureSkipVerify: true,
 		}
 
-		// 创建TLS凭证
 		creds = credentials.NewTLS(tlsClientConfig)
 	} else {
-		// 如果没有TLS配置，使用不安全连接（仅用于测试）
 		creds = credentials.NewTLS(&tls.Config{InsecureSkipVerify: true})
 	}
 
-	// 使用凭证创建gRPC连接
 	conn, err := grpc.Dial(addr, grpc.WithTransportCredentials(creds))
 	if err != nil {
 		firlog.Logger.Errorf("连接失败: %v", err)
@@ -68,7 +62,7 @@ func NewKvClient(addr string, tlsConfig *firconfig.TLSConfig) *KVClient {
 
 	client := pb.NewKvserverClient(conn)
 
-	ret := &KVClient{
+	ret := &KVconn{
 		Valid:    true,
 		Conn:     client,
 		Realconn: conn,

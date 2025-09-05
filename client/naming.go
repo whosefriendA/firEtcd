@@ -37,13 +37,11 @@ func (n *Node) Unmarshal(data []byte) {
 }
 
 func (n *Node) Key() string {
-	// 使用 etcdv3 风格的键格式
 	return fmt.Sprintf("/%s/%s/%s:%s", n.Env, n.AppId, n.Name, n.Port)
 }
 
 // SetNode 使用 Lease 机制注册服务节点
 func (n *Node) SetNode(ck KVStore, TTL time.Duration) error {
-	// 直接使用 TTL，内部会自动创建 Lease
 	err := ck.Put(n.Key(), n.Marshal(), TTL)
 	if err != nil {
 		return fmt.Errorf("failed to register service node: %w", err)
@@ -53,23 +51,19 @@ func (n *Node) SetNode(ck KVStore, TTL time.Duration) error {
 
 // SetNodeWithLease 手动管理租约的服务注册（推荐用于长期服务）
 func (n *Node) SetNodeWithLease(ck KVStore, TTL time.Duration) (int64, func(), error) {
-	// 创建租约
 	leaseID, err := ck.LeaseGrant(TTL)
 	if err != nil {
 		return 0, nil, fmt.Errorf("failed to grant lease: %w", err)
 	}
 
-	// 使用租约注册服务（无 TTL）
 	err = ck.Put(n.Key(), n.Marshal(), 0)
 	if err != nil {
 		ck.LeaseRevoke(leaseID)
 		return 0, nil, fmt.Errorf("failed to register service node: %w", err)
 	}
 
-	// 启动自动续约
 	cancel := ck.AutoKeepAlive(leaseID, TTL/3)
 
-	// 返回租约ID和取消函数
 	return leaseID, func() {
 		cancel()
 		ck.LeaseRevoke(leaseID)
@@ -78,7 +72,6 @@ func (n *Node) SetNodeWithLease(ck KVStore, TTL time.Duration) (int64, func(), e
 
 // SetNodeWithLeaseID 使用现有租约注册服务
 func (n *Node) SetNodeWithLeaseID(ck KVStore, leaseID int64) error {
-	// 使用现有租约注册服务
 	err := ck.Put(n.Key(), n.Marshal(), 0)
 	if err != nil {
 		return fmt.Errorf("failed to register service node: %w", err)
@@ -86,17 +79,10 @@ func (n *Node) SetNodeWithLeaseID(ck KVStore, leaseID int64) error {
 	return nil
 }
 
-// 让 GetNode 依赖 KVStore 接口
-// 注意：为了能构造出正确的 prefix key，函数可能需要更多参数，比如 env
 func GetNode(ck KVStore, appName string, env string) ([]*Node, error) {
-	// 假设 prefix key 的格式是 /env/appName/
 	prefixKey := fmt.Sprintf("/%s/%s/", env, appName)
 	datas, err := ck.GetWithPrefix(prefixKey)
 	if err != nil {
-		// 如果错误是 ErrNil，说明没找到，这不是一个真正的错误
-		//if errors.Is(err, ErrNil) { // 假设您有一个 ErrNil
-		//	return []*Node{}, nil
-		//}
 		return nil, err
 	}
 
@@ -107,7 +93,6 @@ func GetNode(ck KVStore, appName string, env string) ([]*Node, error) {
 	nodes := make([]*Node, 0, len(datas))
 	for _, data := range datas {
 		node := &Node{}
-		// 假设使用 json unmarshal
 		if e := json.Unmarshal(data, node); e == nil {
 			nodes = append(nodes, node)
 		}
@@ -158,7 +143,7 @@ func (sr *ServiceRegistry) Register(serviceName, serviceID string, endpoint stri
 		Name:     serviceID,
 		AppId:    serviceName,
 		Port:     endpoint,
-		IPs:      []string{"localhost"}, // 可以从 endpoint 解析
+		IPs:      []string{"localhost"}, 
 		Location: "default",
 		Connect:  0,
 		Weight:   1,
@@ -177,9 +162,8 @@ func (sr *ServiceRegistry) Deregister(serviceName, serviceID string) error {
 		return fmt.Errorf("service not found: %w", err)
 	}
 
-	// 删除服务记录
-	err = sr.ck.Put(key, nil, 0) // 设置为空值
-	if err != nil {
+	err = sr.ck.Put(key, nil, 0)
+		if err != nil {
 		return fmt.Errorf("failed to deregister service: %w", err)
 	}
 

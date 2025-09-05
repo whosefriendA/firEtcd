@@ -8,8 +8,6 @@ import (
 )
 
 // LeaseService implements pb.LeaseServer using KVServer's lease manager
-// Note: This is an initial in-memory wiring. Raft replication and key attachment
-// will be integrated subsequently.
 type LeaseService struct {
 	kv *KVServer
 	pb.UnimplementedLeaseServer
@@ -29,7 +27,6 @@ func (s *LeaseService) LeaseGrant(ctx context.Context, req *pb.LeaseGrantRequest
 }
 
 func (s *LeaseService) LeaseRevoke(ctx context.Context, req *pb.LeaseRevokeRequest) (*pb.LeaseRevokeResponse, error) {
-	// propose deletes for keys under this lease via Raft, then revoke locally
 	s.kv.proposeLeaseRevoke(req.GetID())
 	return &pb.LeaseRevokeResponse{}, nil
 }
@@ -42,7 +39,6 @@ func (s *LeaseService) LeaseKeepAlive(stream pb.Lease_LeaseKeepAliveServer) erro
 		}
 		l, err := s.kv.leaseMgr.KeepAlive(req.GetID())
 		if err != nil || l == nil {
-			// best-effort: return zero TTL to indicate missing
 			if sendErr := stream.Send(&pb.LeaseKeepAliveResponse{ID: req.GetID(), TTLMs: 0}); sendErr != nil {
 				return sendErr
 			}

@@ -6,8 +6,10 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/gob"
+	"fmt"
 	"io/ioutil"
 	"net"
+	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -33,23 +35,14 @@ type KVServer struct {
 	me      int
 	rf      *raft.Raft
 	applyCh chan raft.ApplyMsg
-	dead    int32 // set by Kill()
+	dead    int32
 
-	maxraftstate int // snapshot if log grows this big
+	maxraftstate int
 
-	persister *raft.Persister
-	// Your definitions here.
-
-	//duplicateMap: use to handle mulity RPC request
-	// duplicateMap map[int64]duplicateType
-
-	lastAppliedIndex int //最近添加到状态机中的raft层的log的index
-	//lastInclude
+	lastAppliedIndex int
 	lastIncludeIndex int
-	//log state machine
 	db common.DB
 
-	//缓存的log, seq->index,reply
 	duplicateMap map[int64]duplicateType
 
 	grpc *grpc.Server
@@ -75,8 +68,7 @@ const (
 type WatchEvent struct {
 	Type  WatchEventType
 	Key   string
-	Value []byte // 用于 PUT_EVENT
-	// OldValue []byte // 可选
+	Value []byte
 }
 
 // Watcher 代表一个正在观察事件的客户端
@@ -84,16 +76,14 @@ type watcher struct {
 	id        int64
 	key       string
 	isPrefix  bool
-	eventChan chan<- WatchEvent // 指向客户端 gRPC 流的只写通道
-	// sendInitialState bool // 可选
+	eventChan chan<- WatchEvent
 }
 
-// WatcherManager 管理所有活跃的 watcher
 type WatcherManager struct {
 	mu             sync.RWMutex
 	nextWatcherID  int64
-	exactWatchers  map[string]map[int64]*watcher // key -> watcherID -> watcher
-	prefixWatchers map[string]map[int64]*watcher // prefix -> watcherID -> watcher
+	exactWatchers  map[string]map[int64]*watcher
+	prefixWatchers map[string]map[int64]*watcher
 }
 
 func NewWatcherManager() *WatcherManager {
@@ -104,7 +94,6 @@ func NewWatcherManager() *WatcherManager {
 	}
 }
 
-// Register 注册一个新的 watcher
 func (wm *WatcherManager) Register(key string, isPrefix bool, eventChan chan<- WatchEvent) (watchID int64) {
 	wm.mu.Lock()
 	defer wm.mu.Unlock()
@@ -123,26 +112,25 @@ func (wm *WatcherManager) Register(key string, isPrefix bool, eventChan chan<- W
 		if _, ok := wm.prefixWatchers[key]; !ok {
 			wm.prefixWatchers[key] = make(map[int64]*watcher)
 		}
-		wm.prefixWatchers[key][w.id] = w // 修正：应使用 w.id 作为 key
+		wm.prefixWatchers[key][w.id] = w
 		firlog.Logger.Infof("WatcherManager: 为前缀 '%s' 注册了前缀观察者 ID %d", key, watchID)
 	} else {
 		if _, ok := wm.exactWatchers[key]; !ok {
 			wm.exactWatchers[key] = make(map[int64]*watcher)
 		}
-		wm.exactWatchers[key][w.id] = w // 修正：应使用 w.id 作为 key
+		wm.exactWatchers[key][w.id] = w
 		firlog.Logger.Infof("WatcherManager: 为键 '%s' 注册了精确观察者 ID %d", key, watchID)
 	}
 	return watchID
 }
 
-// Deregister 注销一个 watcher
 func (wm *WatcherManager) Deregister(watchID int64, key string, isPrefix bool) {
 	wm.mu.Lock()
 	defer wm.mu.Unlock()
 
 	if isPrefix {
 		if watchersForKey, ok := wm.prefixWatchers[key]; ok {
-			if _, watcherExists := watchersForKey[watchID]; watcherExists { // 修正：应检查 watchID
+			if _, watcherExists := watchersForKey[watchID]; watcherExists {
 				delete(watchersForKey, watchID)
 				if len(watchersForKey) == 0 {
 					delete(wm.prefixWatchers, key)
@@ -152,7 +140,7 @@ func (wm *WatcherManager) Deregister(watchID int64, key string, isPrefix bool) {
 		}
 	} else {
 		if watchersForKey, ok := wm.exactWatchers[key]; ok {
-			if _, watcherExists := watchersForKey[watchID]; watcherExists { // 修正：应检查 watchID
+			if _, watcherExists := watchersForKey[watchID]; watcherExists {
 				delete(watchersForKey, watchID)
 				if len(watchersForKey) == 0 {
 					delete(wm.exactWatchers, key)
@@ -163,25 +151,20 @@ func (wm *WatcherManager) Deregister(watchID int64, key string, isPrefix bool) {
 	}
 }
 
-// Notify 通知相关 watcher 一个事件。此方法不应阻塞。
 func (wm *WatcherManager) Notify(event WatchEvent) {
 	wm.mu.RLock()
 	defer wm.mu.RUnlock()
 
-	// 通知精确匹配的 watcher
 	if watchers, ok := wm.exactWatchers[event.Key]; ok {
 		for _, w := range watchers {
 			select {
 			case w.eventChan <- event:
 			default:
-				// 客户端通道已满或已关闭，记录此情况。
-				// 如果某个 watcher 持续缓慢，可以考虑关闭它。
 				firlog.Logger.Warnf("WatcherManager: 键 '%s' 的精确观察者 ID %d 事件通道已满或关闭。事件已丢弃。", event.Key, w.id)
 			}
 		}
 	}
 
-	// 通知前缀匹配的 watcher
 	for prefix, watchers := range wm.prefixWatchers {
 		if strings.HasPrefix(event.Key, prefix) {
 			for _, w := range watchers {
@@ -195,11 +178,8 @@ func (wm *WatcherManager) Notify(event WatchEvent) {
 	}
 }
 
-// 新增: 这是专门处理通知的 goroutine
 func (kv *KVServer) notifierLoop() {
-	// 它会不断地从通知通道中读取事件
 	for event := range kv.eventNotifier {
-		// 这个调用在独立的 goroutine 中，不会持有 kv.mu，因此是安全的
 		kv.watcherManager.Notify(event)
 	}
 }
@@ -216,15 +196,11 @@ func (kv *KVServer) Get(_ context.Context, args *pb.GetArgs) (reply *pb.GetReply
 	reply.LeaderId = int32(kv.rf.GetleaderId())
 	reply.ServerId = int32(kv.me)
 
-	//判断自己是不是leader
 	if _, ok := kv.rf.GetState(); ok {
-		// firlog.Logger.Infof("server [%d] [info] i am leader", kv.me)
 	} else {
-		// firlog.Logger.Infof("server [%d] [info] i am not leader ,leader is [%d]", kv.me, reply.LeaderId)
 		return
 	}
 
-	//判断自己有没有从重启中恢复完毕状态机
 	if !kv.rf.IisBack {
 		firlog.Logger.Infof("server [%d] [recovering] reject a [Get]🔰 args[%v]", kv.me, args)
 		reply.Err = ErrWaitForRecover
@@ -242,16 +218,13 @@ func (kv *KVServer) Get(_ context.Context, args *pb.GetArgs) (reply *pb.GetReply
 
 	readLastIndex := kv.rf.GetCommitIndex()
 	term := kv.rf.GetTerm()
-	//需要发送一轮心跳获得大多数回复，只是为了确定没有一个任期更加新的leader，保证自己的数据不是脏的
 	if kv.rf.CheckIfDepose() {
 		reply.Err = ErrWrongLeader
 		return
 	}
 
-	//return false ,但是进入下面代码段的时候，发现自己又不是leader了，捏麻麻的
 	kv.mu.Lock()
 	defer kv.mu.Unlock()
-	//跟raft层之间的同步问题，raft刚当选leader的时候，还没有
 
 	if kv.lastAppliedIndex >= readLastIndex && kv.rf.GetLeader() && term == kv.rf.GetTerm() {
 		var value [][]byte
@@ -320,25 +293,15 @@ func (kv *KVServer) Get(_ context.Context, args *pb.GetArgs) (reply *pb.GetReply
 }
 
 func (kv *KVServer) PutAppend(_ context.Context, args *pb.PutAppendArgs) (reply *pb.PutAppendReply, err error) {
-	// start := time.Now()
-	// firlog.Logger.Infof("server [%d] [PutAppend] 📨receive a args[%v]", kv.me, args.String())
-	// defer func() {
-	// 	firlog.Logger.Infof("server [%d] [PutAppend] 📨complete a args[%v] spand time:%v", kv.me, args.String(), time.Since(start))
-	// }()
 	reply = new(pb.PutAppendReply)
-	// Your code here.
 	reply.LeaderId = int32(kv.rf.GetleaderId())
 	reply.Err = ErrWrongLeader
 	reply.ServerId = int32(kv.me)
 
 	if _, ok := kv.rf.GetState(); ok {
-		// firlog.Logger.Infof("server [%d] [info] i am leader", kv.me)
 	} else {
-		// firlog.Logger.Infof("server [%d] [info] i am not leader ,leader is [%d]", kv.me, reply.LeaderId)
 		return
 	}
-	// v := DateToValue(args.Value)
-
 	op := raft.Op{
 		ClientId: args.ClientId,
 		Offset:   args.LatestOffset,
@@ -352,14 +315,9 @@ func (kv *KVServer) PutAppend(_ context.Context, args *pb.PutAppendArgs) (reply 
 		LeaseId: args.LeaseId,
 	}
 
-	//start前需要查看本地log缓存是否有seq
-
-	//这里通过缓存提交，一方面提高了kvserver应对网络错误的回复速度，另一方面进行了第一层的重复检测
-	//但是注意可能同时有两个相同的getDuplicateMap通过这里
 	kv.mu.Lock()
 	if args.LatestOffset < kv.duplicateMap[args.ClientId].Offset {
 		kv.mu.Unlock()
-		//firlog.Logger.Debugln("pass", kv.me)
 		return
 	}
 	if args.LatestOffset == kv.duplicateMap[args.ClientId].Offset {
@@ -372,16 +330,10 @@ func (kv *KVServer) PutAppend(_ context.Context, args *pb.PutAppendArgs) (reply 
 				reply.Err = ErrCasFaildInt
 			}
 		}
-		//firlog.Logger.Debugln("pass", kv.me)
 		kv.mu.Unlock()
 		return
 	}
 	kv.mu.Unlock()
-
-	//没有在本地缓存发现过seq
-	//向raft提交操作
-	// firlog.Logger.Debugln("raw data:", []byte(op.Value))
-	// data, err := json.Marshal(op)
 
 	index, term, isleader := kv.rf.Start(op.Marshal())
 
@@ -390,18 +342,13 @@ func (kv *KVServer) PutAppend(_ context.Context, args *pb.PutAppendArgs) (reply 
 	}
 
 	kv.rf.SendAppendEntriesToAll()
-	// firlog.Logger.Infof("server [%d] submit to raft key[%v] value[%v]", kv.me, op.Key, op.Value)
-	//提交后阻塞等待
-	//等待applyCh拿到对应的index，比对seq是否正确
 	startWait := time.Now()
 	for !kv.killed() {
 
 		kv.mu.Lock()
 
 		if index <= kv.lastAppliedIndex {
-			//双重防重复
 			if args.LatestOffset < kv.duplicateMap[args.ClientId].Offset {
-				//firlog.Logger.Debugln("pass", kv.me)
 				kv.mu.Unlock()
 				return
 			}
@@ -415,16 +362,13 @@ func (kv *KVServer) PutAppend(_ context.Context, args *pb.PutAppendArgs) (reply 
 						reply.Err = ErrCasFaildInt
 					}
 				}
-				//firlog.Logger.Debugln("pass", kv.me)
 				kv.mu.Unlock()
 				return
 			}
 
 			firlog.Logger.Infof("server [%d] [PutAppend] appliedIndex available :PutAppend index[%d] lastAppliedIndex[%d]", kv.me, index, kv.lastAppliedIndex)
 			if term != kv.rf.GetTerm() {
-				//term不匹配了，说明本次提交失效
 				kv.mu.Unlock()
-				//firlog.Logger.Debugln("pass", kv.me)
 				return
 			} //term匹配，说明本次提交一定是有效的
 
@@ -434,18 +378,15 @@ func (kv *KVServer) PutAppend(_ context.Context, args *pb.PutAppendArgs) (reply 
 			if _, isleader := kv.rf.GetState(); !isleader {
 				reply.Err = ErrWrongLeader
 			}
-			//firlog.Logger.Debugln("pass", kv.me)
 			return
 		}
 		kv.mu.Unlock()
 		select {
 		case <-kv.lastIndexCh:
-			// 阻塞等待
 		case <-time.After(time.Millisecond * 500):
 			firlog.Logger.Infof("server [%d] [PutAppend] fail [time out] args.index[%d]", kv.me, index)
 			return
 		}
-		// 因为time.After可能会在超时前多次被重置，所以还需要在外层额外做保证
 		if time.Since(startWait).Milliseconds() > 500 {
 			firlog.Logger.Infof("server [%d] [PutAppend] fail [time out] args.index[%d]", kv.me, index)
 			return
@@ -459,18 +400,15 @@ func (kv *KVServer) Watch(req *pb.WatchRequest, stream pb.Kvserver_WatchServer) 
 		return status.Errorf(codes.Unavailable, "服务器正在关闭")
 	}
 
-	// 判断自己是不是 leader
 	if _, ok := kv.rf.GetState(); !ok {
 		leaderId := int32(kv.rf.GetleaderId())
-		// 你可能想返回一个更具体的错误或头部信息来指明 leader
 		return status.Errorf(codes.FailedPrecondition, "不是 leader，当前 leader 是 %d", leaderId)
 	}
-	// 判断自己有没有从重启中恢复完毕状态机
 	if !kv.rf.IisBack {
 		return status.Errorf(codes.Unavailable, "服务器正在恢复中")
 	}
 
-	clientEventChan := make(chan WatchEvent, 10) // 为此客户端设置的带缓冲的通道
+	clientEventChan := make(chan WatchEvent, 10)
 	watchKey := string(req.Key)
 	isPrefix := req.IsPrefix
 
@@ -479,11 +417,10 @@ func (kv *KVServer) Watch(req *pb.WatchRequest, stream pb.Kvserver_WatchServer) 
 
 	defer func() {
 		kv.watcherManager.Deregister(watchID, watchKey, isPrefix)
-		close(clientEventChan) // 很重要，如果下面的循环没有退出，需要关闭通道以停止它
+		close(clientEventChan)
 		firlog.Logger.Infof("KVServer %d: Watch RPC 为键/前缀 '%s' 注销了观察者 ID %d", kv.me, watchID, watchKey)
 	}()
 
-	// 可选：如果 req.SendInitialState 为 true，发送初始状态
 	if req.GetSendInitialState() {
 		firlog.Logger.Infof("KVServer %d: Watch ID %d, sendInitialState=true. PREPARING to send initial state for key '%s'.", kv.me, watchID, watchKey)
 		kv.mu.Lock()
@@ -498,16 +435,13 @@ func (kv *KVServer) Watch(req *pb.WatchRequest, stream pb.Kvserver_WatchServer) 
 				if err := stream.Send(protoResp); err != nil {
 					firlog.Logger.Errorf("KVServer %d: Watch ID %d, FAILED to send initial prefix value over gRPC stream. Error: %v", kv.me, watchID, err)
 					kv.mu.Unlock()
-					return err // Exit on send error
+					return err
 				}
 			}
 			firlog.Logger.Infof("KVServer %d: Watch ID %d, SUCCESSFULLY SENT all initial prefix values.", kv.me, watchID)
 		} else {
-			// ======================= FIX START =======================
-			// 这是修正的核心：为精确匹配添加数据库查询逻辑
 			entry, err := kv.db.GetEntry(watchKey)
 			if err == nil {
-				// 如果找到了 key
 				protoResp := &pb.WatchResponse{
 					Type:  pb.EventType_PUT_EVENT,
 					Key:   []byte(watchKey),
@@ -517,24 +451,20 @@ func (kv *KVServer) Watch(req *pb.WatchRequest, stream pb.Kvserver_WatchServer) 
 				if sendErr := stream.Send(protoResp); sendErr != nil {
 					firlog.Logger.Errorf("KVServer %d: Watch ID %d, FAILED to send initial value over gRPC stream. Error: %v", kv.me, watchID, sendErr)
 					kv.mu.Unlock()
-					return sendErr // Exit on send error
+					return sendErr
 				}
 				firlog.Logger.Infof("KVServer %d: Watch ID %d, SUCCESSFULLY SENT initial value over gRPC stream.", kv.me, watchID)
 			} else {
-				// 只有在 kv.db.GetEntry 确实返回错误时，才打印这个日志
 				firlog.Logger.Infof("KVServer %d: Watch ID %d, Initial value for key '%s' not found in db. Error: %v", kv.me, watchID, watchKey, err)
 			}
-			// ======================= FIX END =========================
 		}
 		kv.mu.Unlock()
 	}
 
-	// 循环向客户端发送事件或检测客户端断开连接
 	for {
 		select {
 		case event, ok := <-clientEventChan:
 			if !ok {
-				// 通道被 Deregister 关闭，流应该结束
 				firlog.Logger.Infof("KVServer %d: 观察者 ID %d 事件通道已关闭，结束流。", kv.me, watchID)
 				return nil
 			}
@@ -545,20 +475,17 @@ func (kv *KVServer) Watch(req *pb.WatchRequest, stream pb.Kvserver_WatchServer) 
 			}
 			if err := stream.Send(protoResp); err != nil {
 				firlog.Logger.Warnf("KVServer %d: 向观察者 ID %d 发送事件时出错: %v。关闭流。", kv.me, watchID, err)
-				return err // 客户端断开连接或其他流错误
+				return err
 			}
 			firlog.Logger.Debugf("KVServer %d: 已向观察者 ID %d 发送事件: %v", kv.me, watchID, event)
 
 		case <-stream.Context().Done():
-			// 客户端关闭了连接或上下文超时
 			firlog.Logger.Infof("KVServer %d: 观察者 ID %d 流上下文完成: %v。关闭流。", kv.me, watchID, stream.Context().Err())
 			return stream.Context().Err()
 		}
 	}
 }
 
-// state machine
-// 将value重新转换为 Op，添加到本地db中
 func (kv *KVServer) HandleApplych() {
 	for !kv.killed() {
 		select {
@@ -567,15 +494,11 @@ func (kv *KVServer) HandleApplych() {
 				return
 			}
 
-			// NEW: Declare a slice to hold events outside the lock
 			var eventsToNotify []WatchEvent
 
-			// --- Critical Section Starts ---
 			kv.mu.Lock()
 
 			if raft_type.CommandValid {
-				// MODIFIED: Call the refactored HandleApplychCommand and receive the events
-				// The rest of the logic inside the lock remains the same
 				if raft_type.CommandIndex > kv.lastAppliedIndex { // Prevent re-applying old commands
 					eventsToNotify = kv.HandleApplychCommand(raft_type)
 					kv.lastAppliedIndex = raft_type.CommandIndex
@@ -583,7 +506,6 @@ func (kv *KVServer) HandleApplych() {
 
 				kv.checkifNeedSnapshot(raft_type.CommandIndex)
 
-				// This non-blocking send to unblock client RPCs is fine to keep inside the lock
 				for {
 					select {
 					case kv.lastIndexCh <- raft_type.CommandIndex:
@@ -594,24 +516,18 @@ func (kv *KVServer) HandleApplych() {
 			APPLYBREAK:
 			} else if raft_type.SnapshotValid {
 				firlog.Logger.Infof("📷 server [%d] receive raftSnapshotIndex[%d]", kv.me, raft_type.SnapshotIndex)
-				kv.HandleApplychSnapshot(raft_type) // Assumes this function correctly handles locking
+				kv.HandleApplychSnapshot(raft_type)
 			} else {
 				firlog.Logger.Fatalf("Unrecordnized applyArgs type")
 			}
 
 			kv.mu.Unlock()
-			// --- Critical Section Ends ---
 
-			// **MOVED OUTSIDE LOCK**: The notification logic is now here.
-			// This part runs without holding the server's main lock, so it can't freeze the state machine.
 			if len(eventsToNotify) > 0 {
 				for _, event := range eventsToNotify {
-					// Non-blockingly send the event to the dedicated notifier goroutine
 					select {
 					case kv.eventNotifier <- event:
-						// Event successfully queued for notification
 					default:
-						// This case is a safeguard against a full notifier channel
 						firlog.Logger.Warnf("KVServer %d: Notifier channel full. Discarding watch event for key %s.", kv.me, event.Key)
 					}
 				}
@@ -634,13 +550,10 @@ func (kv *KVServer) HandleApplychCommand(raft_type raft.ApplyMsg) []WatchEvent {
 		Offset: OP.Offset,
 	}
 
-	var eventsToNotify []WatchEvent // 收集事件，在数据库操作后进行通知
+	var eventsToNotify []WatchEvent
 
 	switch OP.OpType {
 	case int32(pb.OpType_PutT):
-		//更新状态机
-		//有可能有多个start重复执行，所以这一步要检验重复
-
 		err := kv.db.PutEntry(OP.Key, OP.Entry)
 		if err != nil {
 			firlog.Logger.Fatalf("database putEntry faild:%s", err)
@@ -652,18 +565,14 @@ func (kv *KVServer) HandleApplychCommand(raft_type raft.ApplyMsg) []WatchEvent {
 		eventsToNotify = append(eventsToNotify, WatchEvent{Type: WatchEventTypePut, Key: OP.Key, Value: OP.Entry.Value})
 		firlog.Logger.Debugf("KVServer %d: 已应用 Put, Key: %s。已排队等待 watch 通知。", kv.me, OP.Key)
 
-		// firlog.Logger.Infof("server [%d] [Update] [Put]->[%s,%s] [map] -> %v", kv.me, op_type.Key, op_type.Value, kv.db)
-		// firlog.Logger.Infof("server [%d] [Update] [Put]->[%s : %s] ", kv.me, op_type.Key, op_type.Value)
 	case int32(pb.OpType_AppendT):
 
 		ori, _ := kv.db.GetEntry(OP.Key)
 		var buffer bytes.Buffer
 
-		// 写入数据
 		buffer.Write(ori.Value)
 		buffer.Write(OP.Entry.Value)
 
-		// 获取拼接结果
 		result := buffer.Bytes()
 		err := kv.db.PutEntry(OP.Key, common.Entry{
 			Value:    result,
@@ -679,15 +588,13 @@ func (kv *KVServer) HandleApplychCommand(raft_type raft.ApplyMsg) []WatchEvent {
 		eventsToNotify = append(eventsToNotify, WatchEvent{Type: WatchEventTypePut, Key: OP.Key, Value: result})
 		firlog.Logger.Debugf("KVServer %d: 已应用 Put, Key: %s。已排队等待 watch 通知。", kv.me, OP.Key)
 
-		// firlog.Logger.Infof("server [%d] [Update] [Append]->[%s : %s]", kv.me, op_type.Key, op_type.Value)
-
 	case int32(pb.OpType_DelT):
-		_, err := kv.db.GetEntry(OP.Key) // 检查键是否存在
+		_, err := kv.db.GetEntry(OP.Key)
 		kv.db.Del(OP.Key)
 		if OP.LeaseId != 0 && kv.leaseMgr != nil {
 			_ = kv.leaseMgr.DetachKey(OP.LeaseId, OP.Key)
 		}
-		if err == nil { // 仅当键实际存在时才通知
+		if err == nil {
 			eventsToNotify = append(eventsToNotify, WatchEvent{Type: WatchEventTypeDelete, Key: OP.Key})
 			firlog.Logger.Debugf("KVServer %d: 已应用 Del, Key: %s。已排队等待 watch 通知。", kv.me, OP.Key)
 		}
@@ -695,7 +602,7 @@ func (kv *KVServer) HandleApplychCommand(raft_type raft.ApplyMsg) []WatchEvent {
 	case int32(pb.OpType_DelWithPrefix):
 		kv.db.DelWithPrefix(OP.Key)
 
-		eventsToNotify = append(eventsToNotify, WatchEvent{Type: WatchEventTypeDelete, Key: OP.Key /* 此事件的键是前缀 */})
+		eventsToNotify = append(eventsToNotify, WatchEvent{Type: WatchEventTypeDelete, Key: OP.Key})
 		firlog.Logger.Debugf("KVServer %d: 已应用 DelWithPrefix, Prefix: %s。已排队等待 watch 通知 (作为单个前缀删除)。", kv.me, OP.Key)
 
 	case int32(pb.OpType_CAST):
@@ -730,7 +637,6 @@ func (kv *KVServer) HandleApplychCommand(raft_type raft.ApplyMsg) []WatchEvent {
 	case int32(pb.OpType_BatchT):
 		var ops []raft.Op
 		b := bytes.NewBuffer([]byte(OP.Entry.Value))
-		// firlog.Logger.Debugln("receive batch data:", b.Bytes())
 		d := gob.NewDecoder(b)
 		err := d.Decode(&ops)
 		if err != nil {
@@ -749,11 +655,9 @@ func (kv *KVServer) HandleApplychCommand(raft_type raft.ApplyMsg) []WatchEvent {
 
 				var buffer bytes.Buffer
 
-				// 写入数据
 				buffer.Write(ori.Value)
 				buffer.Write(op.Entry.Value)
 
-				// 获取拼接结果
 				result := buffer.Bytes()
 				kv.db.PutEntry(op.Key, common.Entry{
 					Value:    result,
@@ -771,10 +675,8 @@ func (kv *KVServer) HandleApplychCommand(raft_type raft.ApplyMsg) []WatchEvent {
 				eventsToNotify = append(eventsToNotify, WatchEvent{Type: WatchEventTypeDelete, Key: op.Key})
 			case int32(pb.OpType_DelWithPrefix):
 				kv.db.DelWithPrefix(op.Key)
-				// prefix detach is non-trivial; skipped here
 				eventsToNotify = append(eventsToNotify, WatchEvent{Type: WatchEventTypeDelete, Key: op.Key})
 			}
-			// firlog.Logger.Infof("exec batch op: %+v", op)
 		}
 
 	default:
@@ -799,17 +701,15 @@ func (kv *KVServer) HandleApplychSnapshot(raft_type raft.ApplyMsg) {
 	}
 }
 
-// 主动快照,每一个服务器都在自己log超标的时候启动快照
 func (kv *KVServer) checkifNeedSnapshot(spanshotindex int) {
 	if kv.maxraftstate == -1 {
 		return
 	}
-	if !kv.rf.IfNeedExceedLog(kv.maxraftstate) {
+	if kv.rf.GetRaftStateSize() < kv.maxraftstate {
 		return
-	} //需要进行快照了
+	}
 
-	firlog.Logger.Infof("server [%d] need snapshot limit[%d] curRaftStatesize[%d] snapshotIndex[%d]", kv.me, kv.maxraftstate, kv.persister.RaftStateSize(), spanshotindex)
-	//首先查看一下自己的状态机应用到了那一步
+	firlog.Logger.Infof("server [%d] need snapshot limit[%d] curRaftStatesize[%d] snapshotIndex[%d]", kv.me, kv.maxraftstate, kv.rf.GetRaftStateSize(), spanshotindex)
 
 	var buf bytes.Buffer
 	enc := gob.NewEncoder(&buf)
@@ -821,12 +721,9 @@ func (kv *KVServer) checkifNeedSnapshot(spanshotindex int) {
 		firlog.Logger.Fatalf("database snapshotdata faild:%s", err)
 	}
 	enc.Encode(data)
-	//将状态机传了进去
 	kv.rf.Snapshot(spanshotindex, buf.Bytes())
-
 }
 
-// 被动快照
 func (kv *KVServer) readPersist(data []byte) {
 
 	if data == nil || len(data) < 1 {
@@ -887,7 +784,7 @@ func (kv *KVServer) killed() bool {
 // you don't need to snapshot.
 // StartKVServer() must return quickly, so it should start goroutines
 // for any long-running work.
-func StartKVServer(conf firconfig.Kvserver, me int, persister *raft.Persister, maxraftstate int) *KVServer {
+func StartKVServer(conf firconfig.Kvserver, me int, dataDir string, maxraftstate int) *KVServer {
 	// call labgob.Register on structures you want
 	// Go's RPC library to marshall/unmarshall.
 	var err error
@@ -897,7 +794,6 @@ func StartKVServer(conf firconfig.Kvserver, me int, persister *raft.Persister, m
 	kv := &KVServer{
 		me:               me,
 		maxraftstate:     maxraftstate,
-		persister:        persister,
 		applyCh:          make(chan raft.ApplyMsg),
 		lastAppliedIndex: 0,
 		lastIncludeIndex: 0,
@@ -932,9 +828,10 @@ func StartKVServer(conf firconfig.Kvserver, me int, persister *raft.Persister, m
 		}
 	}()
 
-	kv.rf = raft.Make(me, persister, kv.applyCh, conf.Rafts)
+	walDir := filepath.Join(dataDir, fmt.Sprintf("raft-%d", me))
 
-	kv.readPersist(persister.ReadSnapshot())
+	// WAL-MOD: 调用新的 raft.Make 函数，传入 WAL 目录路径
+	kv.rf = raft.Make(me, walDir, kv.applyCh, conf.Rafts)
 	go kv.HandleApplych()
 
 	// 加载TLS证书

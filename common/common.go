@@ -5,7 +5,6 @@ import (
 	"unsafe"
 )
 
-// for vue3 frontend
 type Respond struct {
 	Code int `json:"code"`
 	Data any `json:"data"`

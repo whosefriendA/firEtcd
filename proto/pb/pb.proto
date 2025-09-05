@@ -51,6 +51,7 @@ service raft {
   rpc AppendEntries(AppendEntriesArgs) returns (AppendEntriesReply);
   rpc RequestVote(RequestVoteArgs) returns (RequestVoteReply);
 }
+
 enum OpType {
   GetT = 0;
   PutT = 1;
